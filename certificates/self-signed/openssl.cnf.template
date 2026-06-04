@@ -1,0 +1,49 @@
+[ req ]
+default_bits       = 2048
+default_md         = sha256
+string_mask        = utf8only
+distinguished_name = req_distinguished_name  # 对于 CA 证书
+x509_extensions    = v3_ca  # 默认使用 CA 证书的扩展
+req_extensions     = req_ext  # 对于 CSR 或服务器证书使用的扩展
+
+# 对于 CA 证书的 DN 信息
+[ req_distinguished_name ]
+countryName                 = Country Name (2 letter code)
+countryName_default         = CN
+stateOrProvinceName         = State or Province Name (full name)
+stateOrProvinceName_default = Shanghai
+localityName                = Locality Name (eg, city)
+localityName_default        = Shanghai
+organizationName            = Organization Name (eg, company)
+organizationName_default    = ZAQ Co., Ltd.
+organizationalUnitName      = Organizational Unit Name (eg, XXX [Root] CA)
+organizationalUnitName_default = ZAQ Root CA
+commonName                  = Common Name (e.g. server FQDN or YOUR name)
+commonName_default          = ZAQ Root CA
+emailAddress                = Email Address
+emailAddress_default        = ca@zaqbest.com
+
+# 对于服务器证书的 DN 信息
+
+[ dn ]
+C  = CN
+ST = Shanghai
+L  = Shanghai
+O  = ZAQ Co., Ltd.
+OU = localhost
+CN = localhost
+
+# CA 证书的扩展
+[ v3_ca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints       = critical, CA:true
+keyUsage               = critical, keyCertSign, cRLSign
+
+# 服务器证书的扩展 (用于 CSR)
+[ req_ext ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = {{DOMAIN_NAME}}
+DNS.2 = *.{{DOMAIN_NAME}}
