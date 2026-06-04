@@ -191,42 +191,24 @@ set_directory_permissions() {
 }
 
 copy_certificates() {
-    log "Setting up certificates for Trojan-Go..."
-
+    local domain="$DEFAULT_SNI_NAME"
     local target_dir="$INSTALL_DIR/certs"
-    local cert_src="${PROJECT_ROOT}/certificates/self-signed/domain/zaqproxy.com/certs/zaqproxy.com_fullchain.crt"
-    local key_src="${PROJECT_ROOT}/certificates/self-signed/domain/zaqproxy.com/private/zaqproxy.com_decrypted.key"
 
+    log "Generating self-signed certificate for ${domain}..."
     mkdir -p "$target_dir"
 
-    if [ ! -f "$cert_src" ] || [ ! -f "$key_src" ]; then
-        warn "Pre-generated certificates not found at expected location."
-        warn "Run: cd ${PROJECT_ROOT}/certificates/self-signed && ./generate-domain.sh zaqproxy.com"
-        error "Certificate files missing: $cert_src"
-    fi
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "$target_dir/server.key" \
+        -out    "$target_dir/server.crt" \
+        -days   365 \
+        -subj   "/CN=${domain}" \
+        -addext "subjectAltName=DNS:${domain},DNS:*.${domain}"
 
-    cp -v "$cert_src" "$target_dir/server.crt"
-    cp -v "$key_src"  "$target_dir/server.key"
     chmod 644 "$target_dir/server.crt"
     chmod 600 "$target_dir/server.key"
-
-    if openssl x509 -in "$target_dir/server.crt" -noout -text >/dev/null 2>&1; then
-        log "Certificate validated successfully"
-    else
-        warn "Certificate validation failed"
-    fi
-
-    log "  SSL certificate: $target_dir/server.crt"
-    log "  SSL private key: $target_dir/server.key"
+    log "Certificate ready: $target_dir/server.crt"
 }
 
-copy_existing_files() {
-    if [ -d "./certs" ] && [ "$(ls -A ./certs 2>/dev/null)" ]; then
-        log "Copying existing local certificates..."
-        mkdir -p "$INSTALL_DIR/certs"
-        cp -r ./certs/* "$INSTALL_DIR/certs/" 2>/dev/null || true
-    fi
-}
 
 create_config() {
     log "Creating configuration file..."
@@ -473,7 +455,7 @@ execute_steps() {
     case $choice in
         1)  require_root; detect_os; _resolve_trojan_arch
             install_dependencies; download_trojan_go; install_trojan_go
-            copy_existing_files; copy_certificates; create_config
+            copy_certificates; create_config
             set_directory_permissions; create_service; configure_firewall
             start_services; show_completion_info ;;
         2)  require_root; detect_os; _resolve_trojan_arch
@@ -481,7 +463,7 @@ execute_steps() {
         3)  copy_certificates; log "证书设置完成" ;;
         4)  require_root; detect_os; _resolve_trojan_arch
             download_trojan_go; install_trojan_go
-            copy_existing_files; copy_certificates; create_config
+            copy_certificates; create_config
             set_directory_permissions; log "Trojan-Go 安装完成" ;;
         5)  require_root; create_service; log "服务创建完成" ;;
         6)  require_root; configure_firewall; log "防火墙配置完成" ;;
@@ -503,7 +485,6 @@ main() {
                 install_dependencies
                 download_trojan_go
                 install_trojan_go
-                copy_existing_files
                 copy_certificates
                 create_config
                 set_directory_permissions
