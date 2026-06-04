@@ -338,10 +338,17 @@ configure_firewall() {
     elif command -v iptables >/dev/null 2>&1; then
         iptables -C INPUT -p tcp --dport "$TROJAN_PORT" -j ACCEPT 2>/dev/null || \
             iptables -I INPUT -p tcp --dport "$TROJAN_PORT" -j ACCEPT
-        # Persist
-        command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save ||
-            { iptables-save > /etc/sysconfig/iptables 2>/dev/null ||
-              iptables-save > /etc/iptables/rules.v4 2>/dev/null || true; }
+        # Persist rules across reboots
+        if command -v netfilter-persistent >/dev/null 2>&1; then
+            netfilter-persistent save
+        elif command -v iptables-save >/dev/null 2>&1; then
+            if [ -d /etc/sysconfig ]; then
+                iptables-save > /etc/sysconfig/iptables
+            else
+                mkdir -p /etc/iptables
+                iptables-save > /etc/iptables/rules.v4
+            fi
+        fi
         configured=true
     fi
 

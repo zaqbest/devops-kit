@@ -19,7 +19,9 @@ main() {
             pkg_install_if_missing \
                 $common_pkgs \
                 apt-transport-https ca-certificates gnupg lsb-release \
-                software-properties-common dnsutils build-essential
+                dnsutils build-essential
+            # software-properties-common (add-apt-repository) is Ubuntu-only
+            [ "$OS_ID" = "ubuntu" ] && pkg_install_if_missing software-properties-common
             ;;
         rhel)
             pkg_enable_epel
