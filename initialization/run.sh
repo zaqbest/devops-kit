@@ -87,6 +87,18 @@ run_initialization() {
     local step=0
     for script in "$MODULES_DIR"/[0-9][0-9]-*.sh; do
         (( step++ )) || true
+
+        # If RUN_MODULES is set, skip modules not in the list
+        if [ -n "${RUN_MODULES:-}" ]; then
+            local num
+            num=$(basename "$script" | grep -oE '^[0-9]+')
+            local match=0
+            for m in $RUN_MODULES; do
+                [ "$num" = "$m" ] && { match=1; break; }
+            done
+            [ "$match" = "0" ] && { log_info "Skipping module $(basename "$script" .sh) (not in RUN_MODULES)"; continue; }
+        fi
+
         _run_module "$step" "$script"
     done
 
