@@ -5,7 +5,7 @@ set -euo pipefail
 
 STATE_FILE="/var/lib/devops-kit/state.env"
 MODULES_DIR="${DEVOPS_KIT_ROOT}/initialization/modules"
-TOTAL_MODULES=12
+TOTAL_MODULES=13
 
 _load_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
