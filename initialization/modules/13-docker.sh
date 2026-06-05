@@ -19,39 +19,19 @@ _docker_rhel() {
     pkg_install yum-utils
     if command -v dnf &>/dev/null; then
         dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     else
         yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin
     fi
+    pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
 _docker_alpine() {
-    pkg_install docker docker-compose
+    pkg_install docker
     rc-update add docker default
 }
 
-_install_compose_binary() {
-    local ver="${DOCKER_COMPOSE_VERSION:-v5.1.4}"
-    local arch_alias
-    case "$ARCH" in
-        amd64)  arch_alias="x86_64" ;;
-        arm64)  arch_alias="aarch64" ;;
-        armv7)  arch_alias="armv7" ;;
-        *)      log_info "Unsupported arch for Compose binary: $ARCH"; return 1 ;;
-    esac
-    local dest="/usr/local/lib/docker/cli-plugins/docker-compose"
-    mkdir -p "$(dirname "$dest")"
-    curl -fsSL \
-        "https://github.com/docker/compose/releases/download/${ver}/docker-compose-linux-${arch_alias}" \
-        -o "$dest"
-    chmod +x "$dest"
-    ln -sf "$dest" /usr/local/bin/docker-compose
-    log_info "Docker Compose ${ver} installed from GitHub"
-}
-
 main() {
-    # ── Docker ────────────────────────────────────────────────────────────────
+    # ── Docker + Compose ──────────────────────────────────────────────────────
     if command -v docker &>/dev/null; then
         log_info "Docker already installed: $(docker --version)"
     else
@@ -66,17 +46,7 @@ main() {
         log_info "Docker installed: $(docker --version)"
     fi
 
-    # ── Docker Compose ────────────────────────────────────────────────────────
-    if docker compose version &>/dev/null 2>&1; then
-        log_info "Docker Compose already available: $(docker compose version)"
-    else
-        log_info "Installing Docker Compose..."
-        # alpine already installs docker-compose above; others may need binary
-        if [ "$OS_FAMILY" != "alpine" ]; then
-            _install_compose_binary
-        fi
-        log_info "Docker Compose installed: $(docker compose version 2>/dev/null || docker-compose --version)"
-    fi
+    log_info "Docker Compose: $(docker compose version)"
 
     # ── Add user to docker group ──────────────────────────────────────────────
     local target="${DOCKER_ADD_USER:-${SUDO_USER:-}}"
