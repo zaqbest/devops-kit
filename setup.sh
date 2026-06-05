@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GITHUB_TOKEN="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"
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    echo "[error] GITHUB_TOKEN environment variable is not set." >&2
+    echo "        export GITHUB_TOKEN=<your_token> and re-run." >&2
+    exit 1
+fi
+
 REPO_URL="https://${GITHUB_TOKEN}@github.com/zaqbest/devops-kit.git"
 CLONE_DIR="/opt/devops-kit"
 BASHRC="${HOME}/.bashrc"
