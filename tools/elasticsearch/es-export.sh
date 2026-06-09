@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# Argument validation
-if [ "$#" -ne 4 ]; then
-    echo "Usage: $0 <INDEX_NAME> <SRC_URL> <USERNAME> <PASSWORD>"
-    echo "Example: $0 my_index http://192.168.1.1:9200 admin password123"
+usage() {
+    echo "Usage: $0 --index <index> --url <url> --user <user> --pass <pass>"
+    echo "Example: $0 --index my_index --url http://192.168.1.1:9200 --user admin --pass password123"
     echo ""
     echo "Performance tuning environment variables (override as needed):"
     echo "  LIMIT=5000            Records per batch"
@@ -15,12 +14,27 @@ if [ "$#" -ne 4 ]; then
     echo "  RETRY_DELAY=5000      Retry interval (ms)"
     echo "  FS_COMPRESS=true      Local file gzip compression (true/false)"
     exit 1
-fi
+}
 
-INDEX=$1
-SRC_URL=$2
-USER=$3
-PASS=$4
+INDEX=""
+SRC_URL=""
+USER=""
+PASS=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --index) INDEX="$2";   shift 2 ;;
+        --url)   SRC_URL="$2"; shift 2 ;;
+        --user)  USER="$2";    shift 2 ;;
+        --pass)  PASS="$2";    shift 2 ;;
+        *) echo "[ERROR] Unknown option: $1"; usage ;;
+    esac
+done
+
+if [ -z "$INDEX" ] || [ -z "$SRC_URL" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
+    echo "[ERROR] Missing required parameters."
+    usage
+fi
 
 # Performance parameters (environment variable overrides supported)
 LIMIT=${LIMIT:-5000}

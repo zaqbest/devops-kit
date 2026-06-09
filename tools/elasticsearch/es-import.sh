@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 
-# Argument validation
-if [ "$#" -ne 4 ]; then
-    echo "Usage: $0 <SRC_INDEX_NAME> <DEST_URL> <USERNAME> <PASSWORD>"
-    echo "Example: $0 my_index http://192.168.1.2:9200 admin password123"
+usage() {
+    echo "Usage: $0 --src <index> [--dest <index>] --url <url> --user <user> --pass <pass>"
+    echo "Example: $0 --src my_index --url http://192.168.1.2:9200 --user admin --pass password123"
     echo ""
     echo "Performance tuning environment variables (override as needed):"
     echo "  LIMIT=5000            Records per batch"
@@ -14,12 +13,31 @@ if [ "$#" -ne 4 ]; then
     echo "  RETRY_DELAY=5000      Retry interval (ms)"
     echo "  FS_COMPRESS=true      Read gzip-compressed files (must match export setting)"
     exit 1
+}
+
+SRC_INDEX_NAME=""
+DEST_INDEX_NAME=""
+DEST_URL=""
+USER=""
+PASS=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --src)   SRC_INDEX_NAME="$2";  shift 2 ;;
+        --dest)  DEST_INDEX_NAME="$2"; shift 2 ;;
+        --url)   DEST_URL="$2";        shift 2 ;;
+        --user)  USER="$2";            shift 2 ;;
+        --pass)  PASS="$2";            shift 2 ;;
+        *) echo "[ERROR] Unknown option: $1"; usage ;;
+    esac
+done
+
+if [ -z "$SRC_INDEX_NAME" ] || [ -z "$DEST_URL" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
+    echo "[ERROR] Missing required parameters."
+    usage
 fi
 
-SRC_INDEX_NAME=$1
-DEST_URL=$2
-USER=$3
-PASS=$4
+DEST_INDEX_NAME="${DEST_INDEX_NAME:-$SRC_INDEX_NAME}"
 
 # Performance parameters (environment variable overrides supported)
 LIMIT=${LIMIT:-5000}
@@ -82,17 +100,17 @@ AUTH_HEADER=$(echo -n "${USER}:${PASS}" | base64)
 HEADERS="{\"Authorization\": \"Basic ${AUTH_HEADER}\"}"
 
 echo "--------------------------------------------"
-echo "Starting import of index: ${SRC_INDEX_NAME}"
+echo "Starting import of index: ${SRC_INDEX_NAME} -> ${DEST_INDEX_NAME}"
 echo "Destination URL: ${DEST_URL}"
 echo "Performance parameters: limit=${LIMIT} concurrent=${CONCURRENT} sockets=${MAX_SOCKETS} timeout=${TIMEOUT}ms compress=${FS_COMPRESS}"
 echo "--------------------------------------------"
 
 # 3. Check whether the destination index already exists (core logic: abort if it does)
 echo "Checking destination index status..."
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${USER}:${PASS}" "${DEST_URL}/${SRC_INDEX_NAME}")
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${USER}:${PASS}" "${DEST_URL}/${DEST_INDEX_NAME}")
 
 if [ "$HTTP_CODE" == "200" ]; then
-    echo "[ABORT] Destination index '${SRC_INDEX_NAME}' already exists. Import aborted for data safety."
+    echo "[ABORT] Destination index '${DEST_INDEX_NAME}' already exists. Import aborted for data safety."
     exit 1
 elif [ "$HTTP_CODE" == "404" ]; then
     echo "[CONTINUE] Destination index does not exist, ready to create and import data..."
@@ -117,7 +135,7 @@ for TYPE in "${TYPES[@]}"; do
     if [ "$TYPE" == "data" ]; then
         NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
           --input="${FILE}" \
-          --output="${DEST_URL}/${SRC_INDEX_NAME}" \
+          --output="${DEST_URL}/${DEST_INDEX_NAME}" \
           --output-headers="${HEADERS}" \
           --type="${TYPE}" \
           --limit="${LIMIT}" \
@@ -131,7 +149,7 @@ for TYPE in "${TYPES[@]}"; do
     else
         NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
           --input="${FILE}" \
-          --output="${DEST_URL}/${SRC_INDEX_NAME}" \
+          --output="${DEST_URL}/${DEST_INDEX_NAME}" \
           --output-headers="${HEADERS}" \
           --type="${TYPE}" \
           --limit="${LIMIT}" \
@@ -147,5 +165,5 @@ for TYPE in "${TYPES[@]}"; do
 done
 
 echo "--------------------------------------------"
-echo "Index ${SRC_INDEX_NAME} imported successfully!"
+echo "Index ${SRC_INDEX_NAME} imported successfully as ${DEST_INDEX_NAME}!"
 echo "--------------------------------------------"
