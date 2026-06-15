@@ -1,8 +1,13 @@
 #!/bin/bash
 
 usage() {
-    echo "Usage: $0 --index <index> --url <url> --user <user> --pass <pass>"
-    echo "Example: $0 --index my_index --url http://192.168.1.1:9200 --user admin --pass password123"
+    echo "Usage: $0 --index <index> --url <url> (--user <user> --pass <pass> | --apikey <key>) [--max-docs <n>]"
+    echo "Example: $0 --index my_index --url http://192.168.1.1:9200 --user admin --pass password123 --max-docs 10000"
+    echo "         $0 --index my_index --url http://192.168.1.1:9200 --apikey VnVhQ2ZHY0JDZGJjZXZFbU..."
+    echo ""
+    echo "Options:"
+    echo "  --max-docs <n>        Maximum number of documents to export (default: unlimited)"
+    echo "  --apikey <key>        Elasticsearch API key (mutually exclusive with --user/--pass)"
     echo ""
     echo "Performance tuning environment variables (override as needed):"
     echo "  LIMIT=5000            Records per batch"
@@ -20,20 +25,34 @@ INDEX=""
 SRC_URL=""
 USER=""
 PASS=""
+APIKEY=""
+MAX_DOCS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --index) INDEX="$2";   shift 2 ;;
-        --url)   SRC_URL="$2"; shift 2 ;;
-        --user)  USER="$2";    shift 2 ;;
-        --pass)  PASS="$2";    shift 2 ;;
+        --index)    INDEX="$2";    shift 2 ;;
+        --url)      SRC_URL="$2";  shift 2 ;;
+        --user)     USER="$2";     shift 2 ;;
+        --pass)     PASS="$2";     shift 2 ;;
+        --apikey)   APIKEY="$2";   shift 2 ;;
+        --max-docs) MAX_DOCS="$2"; shift 2 ;;
         *) echo "[ERROR] Unknown option: $1"; usage ;;
     esac
 done
 
-if [ -z "$INDEX" ] || [ -z "$SRC_URL" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
+if [ -z "$INDEX" ] || [ -z "$SRC_URL" ]; then
     echo "[ERROR] Missing required parameters."
     usage
+fi
+
+if [ -n "$APIKEY" ] && ([ -n "$USER" ] || [ -n "$PASS" ]); then
+    echo "[ERROR] --apikey and --user/--pass are mutually exclusive."
+    exit 1
+fi
+
+if [ -z "$APIKEY" ] && ([ -z "$USER" ] || [ -z "$PASS" ]); then
+    echo "[ERROR] Either --apikey or both --user and --pass are required."
+    exit 1
 fi
 
 # Performance parameters (environment variable overrides supported)
@@ -56,16 +75,39 @@ fi
 
 mkdir -p "$BACKUP_DIR"
 
-# Build authentication info
-AUTH_HEADER=$(echo -n "${USER}:${PASS}" | base64)
-HEADERS="{\"Authorization\": \"Basic ${AUTH_HEADER}\"}"
+# Build authentication header
+if [ -n "$APIKEY" ]; then
+    HEADERS="{\"Authorization\": \"ApiKey ${APIKEY}\"}"
+    CURL_AUTH=(-H "Authorization: ApiKey ${APIKEY}")
+else
+    AUTH_HEADER=$(echo -n "${USER}:${PASS}" | base64)
+    HEADERS="{\"Authorization\": \"Basic ${AUTH_HEADER}\"}"
+    CURL_AUTH=(-u "${USER}:${PASS}")
+fi
 
 echo "--------------------------------------------"
 echo "Starting export of index: ${INDEX}"
 echo "Source URL: ${SRC_URL}"
 echo "Storage directory: ${BACKUP_DIR}"
 echo "Performance parameters: limit=${LIMIT} concurrent=${CONCURRENT} sockets=${MAX_SOCKETS} timeout=${TIMEOUT}ms scroll=${SCROLL_TIME} compress=${FS_COMPRESS}"
+if [ -n "$MAX_DOCS" ]; then
+    echo "Max docs: ${MAX_DOCS}"
+fi
 echo "--------------------------------------------"
+
+# Check index status — closed indices cannot be scrolled
+echo "Checking index status..."
+INDEX_STATUS=$(curl -sk "${CURL_AUTH[@]}" "${SRC_URL}/_cat/indices/${INDEX}?h=status" | tr -d '[:space:]')
+if [ "$INDEX_STATUS" == "close" ]; then
+    echo "[ERROR] Index '${INDEX}' is closed. Scroll/search is not available on closed indices."
+    echo "        Open it first, then re-run the export:"
+    echo "          POST ${SRC_URL}/${INDEX}/_open"
+    exit 1
+elif [ -z "$INDEX_STATUS" ]; then
+    echo "[ERROR] Index '${INDEX}' not found or unreachable."
+    exit 1
+fi
+echo "[OK] Index status: ${INDEX_STATUS}"
 
 # Types to export
 TYPES=("settings" "mapping" "data" "alias")
@@ -82,6 +124,10 @@ for TYPE in "${TYPES[@]}"; do
 
     # Enable concurrency and scroll optimization for data type; others use single request
     if [ "$TYPE" == "data" ]; then
+        MAX_DOCS_ARG=""
+        if [ -n "$MAX_DOCS" ]; then
+            MAX_DOCS_ARG="--size=${MAX_DOCS}"
+        fi
         NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
           --input="${SRC_URL}/${INDEX}" \
           --input-headers="${HEADERS}" \
@@ -94,7 +140,8 @@ for TYPE in "${TYPES[@]}"; do
           --scrollTime="${SCROLL_TIME}" \
           --retryAttempts="${RETRY_ATTEMPTS}" \
           --retryDelay="${RETRY_DELAY}" \
-          --fsCompress="${FS_COMPRESS}"
+          --fsCompress="${FS_COMPRESS}" \
+          ${MAX_DOCS_ARG}
     else
         NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
           --input="${SRC_URL}/${INDEX}" \

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 
 usage() {
-    echo "Usage: $0 --src <index> [--dest <index>] --url <url> --user <user> --pass <pass>"
-    echo "Example: $0 --src my_index --url http://192.168.1.2:9200 --user admin --pass password123"
+    echo "Usage: $0 --src <index> [--dest <index>] --url <url> (--user <user> --pass <pass> | --apikey <key>) [--shards <n>] [--replicas <n>]"
+    echo "Example: $0 --src my_index --url http://192.168.1.2:9200 --user admin --pass password123 --shards 3 --replicas 1"
+    echo "         $0 --src my_index --url http://192.168.1.2:9200 --apikey VnVhQ2ZHY0JDZGJjZXZFbU..."
+    echo ""
+    echo "Options:"
+    echo "  --shards <n>          Override number of primary shards (cannot be changed after creation)"
+    echo "  --replicas <n>        Override number of replica shards"
+    echo "  --apikey <key>        Elasticsearch API key (mutually exclusive with --user/--pass)"
     echo ""
     echo "Performance tuning environment variables (override as needed):"
     echo "  LIMIT=5000            Records per batch"
@@ -20,21 +26,45 @@ DEST_INDEX_NAME=""
 DEST_URL=""
 USER=""
 PASS=""
+APIKEY=""
+SHARDS=""
+REPLICAS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --src)   SRC_INDEX_NAME="$2";  shift 2 ;;
-        --dest)  DEST_INDEX_NAME="$2"; shift 2 ;;
-        --url)   DEST_URL="$2";        shift 2 ;;
-        --user)  USER="$2";            shift 2 ;;
-        --pass)  PASS="$2";            shift 2 ;;
+        --src)      SRC_INDEX_NAME="$2";  shift 2 ;;
+        --dest)     DEST_INDEX_NAME="$2"; shift 2 ;;
+        --url)      DEST_URL="$2";        shift 2 ;;
+        --user)     USER="$2";            shift 2 ;;
+        --pass)     PASS="$2";            shift 2 ;;
+        --apikey)   APIKEY="$2";          shift 2 ;;
+        --shards)   SHARDS="$2";          shift 2 ;;
+        --replicas) REPLICAS="$2";        shift 2 ;;
         *) echo "[ERROR] Unknown option: $1"; usage ;;
     esac
 done
 
-if [ -z "$SRC_INDEX_NAME" ] || [ -z "$DEST_URL" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
+if [ -z "$SRC_INDEX_NAME" ] || [ -z "$DEST_URL" ]; then
     echo "[ERROR] Missing required parameters."
     usage
+fi
+
+if [ -n "$APIKEY" ] && ([ -n "$USER" ] || [ -n "$PASS" ]); then
+    echo "[ERROR] --apikey and --user/--pass are mutually exclusive."
+    exit 1
+fi
+
+if [ -z "$APIKEY" ] && ([ -z "$USER" ] || [ -z "$PASS" ]); then
+    echo "[ERROR] Either --apikey or both --user and --pass are required."
+    exit 1
+fi
+    echo "[ERROR] --shards must be a positive integer."
+    exit 1
+fi
+
+if [[ -n "$REPLICAS" && ! "$REPLICAS" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] --replicas must be a non-negative integer."
+    exit 1
 fi
 
 DEST_INDEX_NAME="${DEST_INDEX_NAME:-$SRC_INDEX_NAME}"
@@ -95,19 +125,40 @@ if [ ! -f "$SETTINGS_FILE" ] || [ ! -f "$MAPPING_FILE" ] || [ ! -f "$DATA_FILE" 
     exit 1
 fi
 
-# 2. Build authentication info
-AUTH_HEADER=$(echo -n "${USER}:${PASS}" | base64)
-HEADERS="{\"Authorization\": \"Basic ${AUTH_HEADER}\"}"
+# Patch settings file if --shards or --replicas override is requested
+TEMP_SETTINGS=""
+if [ -n "$SHARDS" ] || [ -n "$REPLICAS" ]; then
+    if ! command -v jq &>/dev/null; then
+        echo "[ERROR] --shards/--replicas requires jq. Install it first (e.g. brew install jq)."
+        exit 1
+    fi
+    TEMP_SETTINGS=$(mktemp /tmp/es_settings_XXXXXX.json)
+    trap 'rm -f "$TEMP_SETTINGS"' EXIT
+    JQ_EXPR="."
+    [ -n "$SHARDS" ]   && JQ_EXPR="${JQ_EXPR} | .settings.index.number_of_shards = \"${SHARDS}\""
+    [ -n "$REPLICAS" ] && JQ_EXPR="${JQ_EXPR} | .settings.index.number_of_replicas = \"${REPLICAS}\""
+    jq -c "${JQ_EXPR}" "$SETTINGS_FILE" > "$TEMP_SETTINGS"
+    SETTINGS_FILE="$TEMP_SETTINGS"
+    echo "[INFO] Settings override: shards=${SHARDS:-unchanged} replicas=${REPLICAS:-unchanged}"
+fi
+
+# 2. Build authentication header
+if [ -n "$APIKEY" ]; then
+    HEADERS="{\"Authorization\": \"ApiKey ${APIKEY}\"}"
+    CURL_AUTH=(-H "Authorization: ApiKey ${APIKEY}")
+else
+    AUTH_HEADER=$(echo -n "${USER}:${PASS}" | base64)
+    HEADERS="{\"Authorization\": \"Basic ${AUTH_HEADER}\"}"
+    CURL_AUTH=(-u "${USER}:${PASS}")
+fi
 
 echo "--------------------------------------------"
 echo "Starting import of index: ${SRC_INDEX_NAME} -> ${DEST_INDEX_NAME}"
 echo "Destination URL: ${DEST_URL}"
 echo "Performance parameters: limit=${LIMIT} concurrent=${CONCURRENT} sockets=${MAX_SOCKETS} timeout=${TIMEOUT}ms compress=${FS_COMPRESS}"
 echo "--------------------------------------------"
-
-# 3. Check whether the destination index already exists (core logic: abort if it does)
 echo "Checking destination index status..."
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${USER}:${PASS}" "${DEST_URL}/${DEST_INDEX_NAME}")
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "${CURL_AUTH[@]}" "${DEST_URL}/${DEST_INDEX_NAME}")
 
 if [ "$HTTP_CODE" == "200" ]; then
     echo "[ABORT] Destination index '${DEST_INDEX_NAME}' already exists. Import aborted for data safety."
@@ -124,7 +175,9 @@ TYPES=("settings" "mapping" "data" "alias")
 
 for TYPE in "${TYPES[@]}"; do
     # Data file extension follows compression setting, others always .json
-    if [ "$TYPE" == "data" ] && [ "$FS_COMPRESS" == "true" ]; then
+    if [ "$TYPE" == "settings" ]; then
+        FILE="$SETTINGS_FILE"
+    elif [ "$TYPE" == "data" ] && [ "$FS_COMPRESS" == "true" ]; then
         FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_${TYPE}.json.gz"
     else
         FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_${TYPE}.json"
