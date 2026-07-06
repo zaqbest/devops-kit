@@ -58,6 +58,8 @@ if [ -z "$APIKEY" ] && ([ -z "$USER" ] || [ -z "$PASS" ]); then
     echo "[ERROR] Either --apikey or both --user and --pass are required."
     exit 1
 fi
+
+if [[ -n "$SHARDS" && (! "$SHARDS" =~ ^[0-9]+$ || "$SHARDS" -lt 1) ]]; then
     echo "[ERROR] --shards must be a positive integer."
     exit 1
 fi
@@ -141,8 +143,6 @@ if [ -n "$SHARDS" ] || [ -n "$REPLICAS" ]; then
     SETTINGS_FILE="$TEMP_SETTINGS"
     echo "[INFO] Settings override: shards=${SHARDS:-unchanged} replicas=${REPLICAS:-unchanged}"
 fi
-
-# 2. Build authentication header
 if [ -n "$APIKEY" ]; then
     HEADERS="{\"Authorization\": \"ApiKey ${APIKEY}\"}"
     CURL_AUTH=(-H "Authorization: ApiKey ${APIKEY}")
@@ -170,52 +170,86 @@ else
     exit 1
 fi
 
-# 4. Execute imports in order (Settings -> Mapping -> Data -> Alias)
-TYPES=("settings" "mapping" "data" "alias")
+# 4. Create the destination index in one shot (settings + mappings + aliases),
+#    then stream data via elasticdump.
+#
+# elasticdump's --type=settings|mapping|alias branches are unreliable for our export
+# format (they silently no-op on cleanly-formed JSON). ES itself accepts the full
+# index definition on PUT /{index}, so we assemble one request from the three files.
+echo "[$(date +'%H:%M:%S')] Creating destination index with settings + mappings + aliases..."
 
-for TYPE in "${TYPES[@]}"; do
-    # Data file extension follows compression setting, others always .json
-    if [ "$TYPE" == "settings" ]; then
-        FILE="$SETTINGS_FILE"
-    elif [ "$TYPE" == "data" ] && [ "$FS_COMPRESS" == "true" ]; then
-        FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_${TYPE}.json.gz"
-    else
-        FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_${TYPE}.json"
-    fi
-    echo "[$(date +'%H:%M:%S')] Importing ${TYPE}..."
+if ! command -v jq &>/dev/null; then
+    echo "[ERROR] Import requires jq. Install it first (e.g. brew install jq)."
+    exit 1
+fi
 
-    # Enable concurrency and noRefresh for data type to speed up writes; others use single request
-    if [ "$TYPE" == "data" ]; then
-        NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
-          --input="${FILE}" \
-          --output="${DEST_URL}/${DEST_INDEX_NAME}" \
-          --output-headers="${HEADERS}" \
-          --type="${TYPE}" \
-          --limit="${LIMIT}" \
-          --concurrentRequests="${CONCURRENT}" \
-          --maxSockets="${MAX_SOCKETS}" \
-          --timeout="${TIMEOUT}" \
-          --retryAttempts="${RETRY_ATTEMPTS}" \
-          --retryDelay="${RETRY_DELAY}" \
-          --fsCompress="${FS_COMPRESS}" \
-          --noRefresh
-    else
-        NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
-          --input="${FILE}" \
-          --output="${DEST_URL}/${DEST_INDEX_NAME}" \
-          --output-headers="${HEADERS}" \
-          --type="${TYPE}" \
-          --limit="${LIMIT}" \
-          --timeout="${TIMEOUT}" \
-          --retryAttempts="${RETRY_ATTEMPTS}" \
-          --retryDelay="${RETRY_DELAY}"
-    fi
+ALIAS_FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_alias.json"
 
-    if [ $? -ne 0 ]; then
-        echo "[FAIL] Error occurred during ${TYPE} import!"
-        exit 1
-    fi
-done
+# ES rejects these read-only / system-managed fields on index creation.
+# Strip them from the settings block before PUT.
+CREATE_BODY=$(jq -n \
+    --slurpfile s "$SETTINGS_FILE" \
+    --slurpfile m "$MAPPING_FILE" \
+    --slurpfile a "$ALIAS_FILE" \
+    --arg src "$SRC_INDEX_NAME" \
+    '{
+        settings: (
+            ($s[0][$src].settings // {})
+            | .index |= (
+                del(.creation_date, .uuid, .provided_name, .version,
+                    .routing, .history, .resize, .frozen, .verified_before_close)
+            )
+        ),
+        mappings: ($m[0][$src].mappings // {}),
+        aliases: ($a[0][$src].aliases // {})
+    }')
+
+CREATE_RESPONSE_FILE=$(mktemp /tmp/es_create_resp_XXXXXX.json)
+trap 'rm -f "$TEMP_SETTINGS" "$CREATE_RESPONSE_FILE"' EXIT
+
+HTTP_CODE=$(curl -sk -o "$CREATE_RESPONSE_FILE" -w "%{http_code}" \
+    -X PUT "${CURL_AUTH[@]}" \
+    -H "Content-Type: application/json" \
+    --data "$CREATE_BODY" \
+    "${DEST_URL}/${DEST_INDEX_NAME}")
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "[FAIL] Index creation failed (HTTP $HTTP_CODE). Response:"
+    cat "$CREATE_RESPONSE_FILE"
+    echo
+    exit 1
+fi
+
+# Verify mappings actually landed (dynamic:strict with 0 properties is the failure mode we hit before).
+PROP_COUNT=$(curl -sk "${CURL_AUTH[@]}" "${DEST_URL}/${DEST_INDEX_NAME}/_mapping" \
+    | jq ".[\"${DEST_INDEX_NAME}\"].mappings.properties | length")
+if [ "$PROP_COUNT" = "0" ] || [ -z "$PROP_COUNT" ] || [ "$PROP_COUNT" = "null" ]; then
+    echo "[FAIL] Destination index was created but has 0 mapping properties. Aborting."
+    exit 1
+fi
+echo "[OK] Index created with $PROP_COUNT mapping properties."
+
+# 5. Stream data via elasticdump — this is what elasticdump is actually good at.
+DATA_FILE_LOCAL="$DATA_FILE"
+echo "[$(date +'%H:%M:%S')] Importing data..."
+NODE_TLS_REJECT_UNAUTHORIZED=0 elasticdump \
+  --input="${DATA_FILE_LOCAL}" \
+  --output="${DEST_URL}/${DEST_INDEX_NAME}" \
+  --output-headers="${HEADERS}" \
+  --type="data" \
+  --limit="${LIMIT}" \
+  --concurrentRequests="${CONCURRENT}" \
+  --maxSockets="${MAX_SOCKETS}" \
+  --timeout="${TIMEOUT}" \
+  --retryAttempts="${RETRY_ATTEMPTS}" \
+  --retryDelay="${RETRY_DELAY}" \
+  --fsCompress="${FS_COMPRESS}" \
+  --noRefresh
+
+if [ $? -ne 0 ]; then
+    echo "[FAIL] Error occurred during data import!"
+    exit 1
+fi
 
 echo "--------------------------------------------"
 echo "Index ${SRC_INDEX_NAME} imported successfully as ${DEST_INDEX_NAME}!"

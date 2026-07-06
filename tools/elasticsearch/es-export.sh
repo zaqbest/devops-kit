@@ -122,6 +122,30 @@ for TYPE in "${TYPES[@]}"; do
         OUTPUT_FILE="${BACKUP_DIR}/${INDEX}_${TYPE}.json"
     fi
 
+    # elasticdump has a known bug where --type=settings/alias file-output writes the
+    # JSON payload wrapped in an extra string layer ("{\"...\":..." instead of {"...":...).
+    # Grab those endpoints with curl directly — they're a single GET each, no scroll needed.
+    if [ "$TYPE" == "settings" ] || [ "$TYPE" == "alias" ]; then
+        ENDPOINT="_${TYPE}"
+        HTTP_CODE=$(curl -sk -o "$OUTPUT_FILE" -w "%{http_code}" \
+            "${CURL_AUTH[@]}" "${SRC_URL}/${INDEX}/${ENDPOINT}")
+        if [ "$HTTP_CODE" != "200" ]; then
+            echo "[ERROR] ${TYPE} export failed (HTTP $HTTP_CODE). Response:"
+            cat "$OUTPUT_FILE"
+            exit 1
+        fi
+        # Sanity check: must be a JSON object, not a string
+        if command -v jq &>/dev/null; then
+            TOP_TYPE=$(jq -r 'type' "$OUTPUT_FILE" 2>/dev/null)
+            if [ "$TOP_TYPE" != "object" ]; then
+                echo "[ERROR] ${TYPE} export produced non-object JSON (type=$TOP_TYPE)."
+                exit 1
+            fi
+        fi
+        echo "[DONE] ${TYPE} saved to ${OUTPUT_FILE}"
+        continue
+    fi
+
     # Enable concurrency and scroll optimization for data type; others use single request
     if [ "$TYPE" == "data" ]; then
         MAX_DOCS_ARG=""
