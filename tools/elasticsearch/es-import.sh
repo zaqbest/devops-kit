@@ -161,8 +161,48 @@ echo "Checking destination index status..."
 HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "${CURL_AUTH[@]}" "${DEST_URL}/${DEST_INDEX_NAME}")
 
 if [ "$HTTP_CODE" == "200" ]; then
-    echo "[ABORT] Destination index '${DEST_INDEX_NAME}' already exists. Import aborted for data safety."
-    exit 1
+    echo "[WARN] Destination index '${DEST_INDEX_NAME}' already exists."
+    # Non-interactive stdin (piped, cron) → abort by default for safety.
+    if [ ! -t 0 ]; then
+        echo "[ABORT] stdin is not a TTY; refusing to prompt. Delete the index manually or re-run in a terminal."
+        exit 1
+    fi
+    echo "Choose how to proceed:"
+    echo "  1) Abort import (default, safe)"
+    echo "  2) Delete the existing index and re-import"
+    while true; do
+        read -rp "Enter choice [1-2]: " EXISTS_CHOICE
+        case "$EXISTS_CHOICE" in
+            ""|1)
+                echo "[ABORT] Import aborted by user."
+                exit 1
+                ;;
+            2)
+                echo "[WARN] This will PERMANENTLY delete index '${DEST_INDEX_NAME}' and all its data."
+                read -rp "Type 'delete' to confirm: " CONFIRM
+                if [ "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "delete" ]; then
+                    echo "[ABORT] Confirmation failed. Import aborted."
+                    exit 1
+                fi
+                echo "[INFO] Deleting existing index '${DEST_INDEX_NAME}'..."
+                DEL_RESP_FILE=$(mktemp /tmp/es_delete_resp_XXXXXX.json)
+                DEL_CODE=$(curl -sk -o "$DEL_RESP_FILE" -w "%{http_code}" \
+                    -X DELETE "${CURL_AUTH[@]}" "${DEST_URL}/${DEST_INDEX_NAME}")
+                if [ "$DEL_CODE" != "200" ]; then
+                    echo "[FAIL] Delete failed (HTTP $DEL_CODE). Response:"
+                    cat "$DEL_RESP_FILE"; echo
+                    rm -f "$DEL_RESP_FILE"
+                    exit 1
+                fi
+                rm -f "$DEL_RESP_FILE"
+                echo "[OK] Deleted. Continuing with import..."
+                break
+                ;;
+            *)
+                echo "Invalid choice, please enter 1 or 2."
+                ;;
+        esac
+    done
 elif [ "$HTTP_CODE" == "404" ]; then
     echo "[CONTINUE] Destination index does not exist, ready to create and import data..."
 else
@@ -185,6 +225,31 @@ fi
 
 ALIAS_FILE="${BACKUP_DIR}/${SRC_INDEX_NAME}_alias.json"
 
+# If --dest renames the index (typically the UUID inside the name changes),
+# alias names in the backup embed the OLD UUID and must be rewritten to the new one.
+# Heuristic: strip the longest common prefix and suffix between src and dest names —
+# the remaining middle is treated as the "id part" and replaced everywhere in alias keys.
+SRC_ID_PART=""
+DEST_ID_PART=""
+if [ "$SRC_INDEX_NAME" != "$DEST_INDEX_NAME" ]; then
+    _s="$SRC_INDEX_NAME"; _d="$DEST_INDEX_NAME"
+    _plen=0
+    while [ $_plen -lt ${#_s} ] && [ $_plen -lt ${#_d} ] \
+          && [ "${_s:$_plen:1}" = "${_d:$_plen:1}" ]; do
+        _plen=$((_plen+1))
+    done
+    _slen=0
+    while [ $((_plen + _slen)) -lt ${#_s} ] && [ $((_plen + _slen)) -lt ${#_d} ] \
+          && [ "${_s:$((${#_s}-1-_slen)):1}" = "${_d:$((${#_d}-1-_slen)):1}" ]; do
+        _slen=$((_slen+1))
+    done
+    SRC_ID_PART="${_s:$_plen:$((${#_s}-_plen-_slen))}"
+    DEST_ID_PART="${_d:$_plen:$((${#_d}-_plen-_slen))}"
+    if [ -n "$SRC_ID_PART" ] && [ -n "$DEST_ID_PART" ]; then
+        echo "[INFO] Rewriting alias names: '${SRC_ID_PART}' -> '${DEST_ID_PART}'"
+    fi
+fi
+
 # ES rejects these read-only / system-managed fields on index creation.
 # Strip them from the settings block before PUT.
 CREATE_BODY=$(jq -n \
@@ -192,6 +257,8 @@ CREATE_BODY=$(jq -n \
     --slurpfile m "$MAPPING_FILE" \
     --slurpfile a "$ALIAS_FILE" \
     --arg src "$SRC_INDEX_NAME" \
+    --arg src_id "$SRC_ID_PART" \
+    --arg dest_id "$DEST_ID_PART" \
     '{
         settings: (
             ($s[0][$src].settings // {})
@@ -201,7 +268,13 @@ CREATE_BODY=$(jq -n \
             )
         ),
         mappings: ($m[0][$src].mappings // {}),
-        aliases: ($a[0][$src].aliases // {})
+        aliases: (
+            ($a[0][$src].aliases // {})
+            | if ($src_id | length) > 0 and ($dest_id | length) > 0
+              then with_entries(.key |= (split($src_id) | join($dest_id)))
+              else .
+              end
+        )
     }')
 
 CREATE_RESPONSE_FILE=$(mktemp /tmp/es_create_resp_XXXXXX.json)
