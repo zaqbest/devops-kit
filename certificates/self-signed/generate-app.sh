@@ -6,9 +6,10 @@ export DEFAULT_KEY_PASS=123456
 export CA_KEY_PASS=${DEFAULT_KEY_PASS}
 export export PK12_KEY_PASS=${DEFAULT_KEY_PASS}
 
+export APP_NAME=Network
 export EXPIRE_DAYS=3650
 export OPENSSL_CONFIG_FILE=openssl.cnf.template
-export CSR_COMMON_NAME="Surge Root CA"
+export CSR_COMMON_NAME="Network Root CA"
 
 export CA_ROOT_NAME=ca
 export CA_CA_NAME=ca
@@ -16,7 +17,6 @@ export CA_PRIVATE_FILE=${CA_ROOT_NAME}/private/${CA_CA_NAME}.key
 export CA_CERT_FILE=${CA_ROOT_NAME}/certs/${CA_CA_NAME}.crt
 export CA_SRL_FILE=${CA_ROOT_NAME}/certs/${CA_CA_NAME}.srl
 
-export APP_NAME=surge
 export APP_ROOT_PATH=app/${APP_NAME}
 export APP_PRIVATE_PATH=${APP_ROOT_PATH}/private
 export APP_CERT_PATH=${APP_ROOT_PATH}/certs
