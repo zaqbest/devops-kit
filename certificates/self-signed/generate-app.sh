@@ -46,4 +46,4 @@ openssl x509 -noout -text -in ${APP_CERT_FILE}
 
 cat ${APP_CERT_FILE} ${CA_CERT_FILE} > ${APP_CERT_FULLCHAIN_FILE}
 
-openssl pkcs12 -export -out ${APP_CERT_FULLCHAIN_P12_FILE} -inkey ${APP_PRIVATE_FILE} -in ${APP_CERT_FILE} -passin pass:${CA_KEY_PASS} -password pass:${PK12_KEY_PASS} -certfile ${APP_CERT_FULLCHAIN_FILE}
+openssl pkcs12 -export -out ${APP_CERT_FULLCHAIN_P12_FILE} -inkey ${APP_PRIVATE_FILE} -in ${APP_CERT_FILE} -passin pass:${DEFAULT_KEY_PASS} -password pass:${PK12_KEY_PASS} -certfile ${CA_CERT_FILE}
