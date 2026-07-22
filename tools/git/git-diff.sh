@@ -1,17 +1,21 @@
 #!/bin/bash
 
 # Usage:
-#   git-diff.sh [-b|--branch] <target-branch> [<current-branch>]
+#   git-diff.sh [-b|--branch] [--no-remote] <target-branch> [<current-branch>]
 #     --branch mode: compare two branches (target vs current; current defaults to the currently checked-out branch)
 #
-#   git-diff.sh <target-branch> [<current-dir>]
+#   git-diff.sh [--no-remote] <target-branch> [<current-dir>]
 #     default mode: compare a branch with a working directory (target branch vs current-dir; current-dir defaults to the current directory)
 #
-# Both modes run `git fetch` to refresh remote refs before comparing.
+# By default, both modes run `git fetch` to refresh remote refs before comparing,
+# and prefer the remote-tracking branch (e.g. origin/<branch>) over the local branch
+# to ensure the latest commits are used. Use --no-remote to force using local branches.
 
 set -e
 
 MODE="dir"
+USE_REMOTE=1
+REMOTE_NAME="origin"
 
 # Parse options
 while true; do
@@ -19,6 +23,14 @@ while true; do
     -b|--branch)
       MODE="branch"
       shift
+      ;;
+    --no-remote)
+      USE_REMOTE=0
+      shift
+      ;;
+    --remote)
+      REMOTE_NAME="$2"
+      shift 2
       ;;
     *)
       break
@@ -28,10 +40,12 @@ done
 
 if [ -z "$1" ]; then
   echo "Usage:"
-  echo "  $(basename "$0") [-b|--branch] <target-branch> [<current-branch|current-dir>]"
+  echo "  $(basename "$0") [-b|--branch] [--no-remote] [--remote <name>] <target-branch> [<current-branch|current-dir>]"
   echo ""
-  echo "  -b / --branch  Compare two branches (target-branch vs current-branch)"
-  echo "  (default)      Compare a branch with the working directory (target-branch vs current-dir)"
+  echo "  -b / --branch     Compare two branches (target-branch vs current-branch)"
+  echo "  --no-remote       Do not prefer remote-tracking refs; use local branches as-is"
+  echo "  --remote <name>   Remote name to use for tracking refs (default: origin)"
+  echo "  (default)         Compare a branch with the working directory (target-branch vs current-dir)"
   exit 1
 fi
 
@@ -52,29 +66,69 @@ if [ ! -d "$REPO_DIR/.git" ] && [ ! -d "$REPO_DIR/../.git" ]; then
 fi
 
 # Refresh remote refs
-echo "🔄 Running git fetch to refresh remote refs..."
-git -C "$REPO_DIR" fetch
+if [ "$USE_REMOTE" -eq 1 ]; then
+  echo "🔄 Running git fetch --all --prune to refresh remote refs..."
+  git -C "$REPO_DIR" fetch --all --prune
+fi
 
-TMP_DIR_TARGET="/tmp/git-diff-${TARGET_BRANCH}-$$-target"
+# Resolve a branch name to the ref used for archive.
+# If USE_REMOTE=1 and remote-tracking ref exists, prefer it; otherwise use the local branch.
+resolve_ref() {
+  local branch="$1"
 
-echo "✅ Exporting branch [$TARGET_BRANCH] to temporary directory: $TMP_DIR_TARGET"
+  # If user already passed a fully-qualified ref (contains '/'), just use it if it exists
+  if [ "$USE_REMOTE" -eq 1 ]; then
+    # Try origin/<branch> style
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/${REMOTE_NAME}/${branch}"; then
+      echo "${REMOTE_NAME}/${branch}"
+      return 0
+    fi
+  fi
+
+  # Fall back to local branch / tag / any valid rev
+  if git -C "$REPO_DIR" rev-parse --verify --quiet "$branch" >/dev/null; then
+    echo "$branch"
+    return 0
+  fi
+
+  echo ""
+  return 1
+}
+
+TARGET_REF="$(resolve_ref "$TARGET_BRANCH")"
+if [ -z "$TARGET_REF" ]; then
+  echo "❌ Error: cannot resolve target branch [$TARGET_BRANCH] (neither ${REMOTE_NAME}/${TARGET_BRANCH} nor local ref exists)"
+  exit 1
+fi
+echo "ℹ️  Target ref resolved to: $TARGET_REF"
+
+TMP_DIR_TARGET="/tmp/git-diff-${TARGET_BRANCH//\//_}-$$-target"
+
+echo "✅ Exporting [$TARGET_REF] to temporary directory: $TMP_DIR_TARGET"
 mkdir -p "$TMP_DIR_TARGET"
-git -C "$REPO_DIR" archive "$TARGET_BRANCH" | tar -x -C "$TMP_DIR_TARGET"
+git -C "$REPO_DIR" archive "$TARGET_REF" | tar -x -C "$TMP_DIR_TARGET"
 
 if [ "$MODE" = "branch" ]; then
-  TMP_DIR_CURRENT="/tmp/git-diff-${CURRENT_BRANCH}-$$-current"
-  echo "✅ Exporting branch [$CURRENT_BRANCH] to temporary directory: $TMP_DIR_CURRENT"
-  mkdir -p "$TMP_DIR_CURRENT"
-  git -C "$REPO_DIR" archive "$CURRENT_BRANCH" | tar -x -C "$TMP_DIR_CURRENT"
+  CURRENT_REF="$(resolve_ref "$CURRENT_BRANCH")"
+  if [ -z "$CURRENT_REF" ]; then
+    echo "❌ Error: cannot resolve current branch [$CURRENT_BRANCH]"
+    exit 1
+  fi
+  echo "ℹ️  Current ref resolved to: $CURRENT_REF"
 
-  echo "🔍 Launching Beyond Compare: left=[$TARGET_BRANCH] right=[$CURRENT_BRANCH]"
+  TMP_DIR_CURRENT="/tmp/git-diff-${CURRENT_BRANCH//\//_}-$$-current"
+  echo "✅ Exporting [$CURRENT_REF] to temporary directory: $TMP_DIR_CURRENT"
+  mkdir -p "$TMP_DIR_CURRENT"
+  git -C "$REPO_DIR" archive "$CURRENT_REF" | tar -x -C "$TMP_DIR_CURRENT"
+
+  echo "🔍 Launching Beyond Compare: left=[$TARGET_REF] right=[$CURRENT_REF]"
   bcompare "$TMP_DIR_TARGET" "$TMP_DIR_CURRENT"
 
   echo "✅ Comparison complete. Temporary directories kept at:"
   echo "   $TMP_DIR_TARGET"
   echo "   $TMP_DIR_CURRENT"
 else
-  echo "🔍 Launching Beyond Compare: left=[$TARGET_BRANCH] right=[$CURRENT_DIR]"
+  echo "🔍 Launching Beyond Compare: left=[$TARGET_REF] right=[$CURRENT_DIR]"
   bcompare "$TMP_DIR_TARGET" "$CURRENT_DIR"
 
   echo "✅ Comparison complete. Temporary directory kept at: $TMP_DIR_TARGET"
