@@ -1,0 +1,1 @@
+../tools/git/git-fetch-all.sh
