@@ -142,7 +142,10 @@ detect_os() {
     log "Arch:    $ARCH   Kernel: $(uname -r)"
     log "PkgMgr:  $PKG_MGR   Init: $INIT_SYSTEM"
     log "Host:    $(hostname 2>/dev/null || echo unknown)"
-    [ "$OS_FAMILY" = unknown ] && die "Unsupported system: $OS_PRETTY"
+    if [ "$OS_FAMILY" = unknown ]; then
+        die "Unsupported system: $OS_PRETTY"
+    fi
+    return 0
 }
 
 pkg_update() {
