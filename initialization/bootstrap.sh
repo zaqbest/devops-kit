@@ -65,10 +65,22 @@ die()  { err "$@"; exit 1; }
 step() { echo; printf '%s%s==> %s%s\n' "$_CC" "$_CB" "$*" "$_C0"; }
 run()  { if [ "$DRY_RUN" = 1 ]; then dry "$*"; else eval "$@"; fi; }
 
+# Try to open the controlling terminal so `read` still works when the script
+# itself is being piped in via `bash <(curl ...)` or `curl ... | bash`.
+if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    HAS_TTY=1
+else
+    HAS_TTY=0
+fi
+
 confirm() {
     [ "$ASSUME_YES" = 1 ] && return 0
-    [ ! -t 0 ] && return 0
-    local r; read -rp "$1 [Y/n] " r
+    if [ "$HAS_TTY" != 1 ]; then
+        log "Non-interactive (no tty): auto-answer YES for: $1"
+        return 0
+    fi
+    local r
+    read -rp "$1 [Y/n] " r </dev/tty || { warn "read failed, assuming YES"; return 0; }
     [[ -z $r || $r =~ ^[Yy] ]]
 }
 
@@ -551,8 +563,8 @@ install_docker() {
             return 0
             ;;
         ask)
-            if [ "$ASSUME_YES" = 1 ] || [ ! -t 0 ]; then
-                log "Non-interactive & --with-docker not set: skipping Docker (default off)"
+            if [ "$ASSUME_YES" = 1 ] || [ "$HAS_TTY" != 1 ]; then
+                log "Non-interactive (no tty or --yes): skipping Docker (default off)"
                 log "  Tip: re-run with 'bootstrap.sh --yes --with-docker' to install"
                 return 0
             fi
@@ -571,8 +583,8 @@ install_docker() {
   +----------------------------------------------------------+
 DOCKEREOF
             printf '%s' "$_C0"
-            local r
-            read -rp "Install Docker now? [y/N] " r
+            local r=""
+            read -rp "Install Docker now? [y/N] " r </dev/tty || r=""
             if [[ "$r" =~ ^[Yy] ]]; then
                 do_install=1
             else
