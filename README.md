@@ -11,13 +11,13 @@ Swap、时区/Locale、防火墙、内核 & ulimit 调优、SSH 公钥注入等�
 
 ```bash
 # GitHub 主干（默认，交互式）
-bash <(curl -fsSL https://raw.githubusercontent.com/zaqbest/devops-kit/main/initialization/bootstrap.sh)
+bash <(curl -fsSL https://bootstrap.zaqbest.com)
 
 # 全自动（不询问，适合脚本 / cloud-init user-data）
-bash <(curl -fsSL https://raw.githubusercontent.com/zaqbest/devops-kit/main/initialization/bootstrap.sh) --yes
+bash <(curl -fsSL https://bootstrap.zaqbest.com) --yes
 
 # 演练模式（打印将要执行的操作，不做任何更改）
-bash <(curl -fsSL https://raw.githubusercontent.com/zaqbest/devops-kit/main/initialization/bootstrap.sh) --dry-run
+bash <(curl -fsSL https://bootstrap.zaqbest.com) --dry-run
 ```
 
 > **注入自己的 SSH 公钥**：脚本顶部有 `SSH_PUBLIC_KEYS=(...)` 数组，请 fork 本仓库
@@ -28,7 +28,7 @@ Cloud-init `user-data` 示例：
 ```yaml
 #cloud-config
 runcmd:
-  - bash <(curl -fsSL https://raw.githubusercontent.com/zaqbest/devops-kit/main/initialization/bootstrap.sh) --yes
+  - bash <(curl -fsSL https://bootstrap.zaqbest.com) --yes
 ```
 
 ## 📁 项目结构
