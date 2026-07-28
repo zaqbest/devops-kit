@@ -3,16 +3,20 @@
 #  bootstrap.sh - Standalone VPS post-install initialization
 # -----------------------------------------------------------------------------
 #  1. Detect OS (type/version/arch/pkgmgr)
-#  2. Create appropriately sized swap based on RAM
-#  3. Set locale (en_US.UTF-8) + timezone Asia/Shanghai (UTC+8)
-#  4. Disable firewall (ufw/firewalld/iptables/nftables)
-#  5. Apply high-concurrency kernel/ulimit tuning
-#  6. Install SSH public keys into root's authorized_keys
+#  2. Install essential packages (curl, wget, git, vim, tar, unzip, ...)
+#  3. Create appropriately sized swap based on RAM
+#  4. Set locale (en_US.UTF-8) + timezone Asia/Shanghai (UTC+8)
+#  5. Disable firewall (ufw/firewalld/iptables/nftables)
+#  6. Apply high-concurrency kernel/ulimit tuning
+#  7. Install SSH public keys into root's authorized_keys
+#  8. (Optional) Install Docker via https://get.docker.com  [asked interactively]
 #
 #  Usage:
-#     sudo bash bootstrap.sh              # interactive
-#     sudo bash bootstrap.sh --yes        # non-interactive
-#     sudo bash bootstrap.sh --dry-run    # preview
+#     sudo bash bootstrap.sh                        # interactive (asks about docker)
+#     sudo bash bootstrap.sh --yes                  # non-interactive; docker OFF unless --with-docker
+#     sudo bash bootstrap.sh --yes --with-docker    # non-interactive + install docker
+#     sudo bash bootstrap.sh --no-docker            # never install docker (skip prompt)
+#     sudo bash bootstrap.sh --dry-run              # preview only
 #
 #  Supports: Debian/Ubuntu/CentOS/RHEL/Rocky/AlmaLinux/Fedora/Alpine
 # =============================================================================
@@ -27,13 +31,15 @@ LOCALE="en_US.UTF-8"
 SWAP_MAX_GB=8
 LOG_FILE="/var/log/devops-bootstrap.log"
 
-ASSUME_YES=0; DRY_RUN=0
+ASSUME_YES=0; DRY_RUN=0; DOCKER_MODE=ask   # ask | yes | no
 for arg in "$@"; do
     case "$arg" in
-        -y|--yes)     ASSUME_YES=1 ;;
-        -n|--dry-run) DRY_RUN=1 ;;
-        -h|--help)    sed -n '2,20p' "$0"; exit 0 ;;
-        *)            echo "unknown arg: $arg" >&2; exit 1 ;;
+        -y|--yes)      ASSUME_YES=1 ;;
+        -n|--dry-run)  DRY_RUN=1 ;;
+        --with-docker) DOCKER_MODE=yes ;;
+        --no-docker)   DOCKER_MODE=no ;;
+        -h|--help)     sed -n '2,25p' "$0"; exit 0 ;;
+        *)             echo "unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
 
@@ -87,7 +93,7 @@ is_container() {
 
 # ---- STEP 1: OS detection ---------------------------------------------------
 detect_os() {
-    step "1/6  Detect operating system"
+    step "1/8  Detect operating system"
     OS_ID=""; OS_VERSION_ID=""; OS_PRETTY=""; OS_FAMILY="unknown"; PKG_MGR="unknown"
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -145,9 +151,30 @@ pkg_install() {
     esac
 }
 
-# ---- STEP 2: Swap -----------------------------------------------------------
+# ---- STEP 2: Install essential packages ------------------------------------
+install_essentials() {
+    step "2/8  Install essential packages"
+    local common="curl wget git vim tar unzip ca-certificates"
+    local extra=""
+    case "$OS_FAMILY" in
+        debian)
+            extra="gnupg lsb-release apt-transport-https dnsutils net-tools htop"
+            ;;
+        rhel)
+            extra="bind-utils net-tools htop"
+            ;;
+        alpine)
+            extra="bash sudo openssh openssl bind-tools htop coreutils procps"
+            ;;
+    esac
+    log "Installing: $common $extra"
+    pkg_install $common $extra || warn "some essential packages failed to install (continuing)"
+    log "Essential packages installed"
+}
+
+# ---- STEP 3: Swap -----------------------------------------------------------
 configure_swap() {
-    step "2/6  Configure swap based on RAM"
+    step "3/8  Configure swap based on RAM"
     if is_container; then warn "Container env, skipping swap"; return 0; fi
 
     local ram_kb ram_mb ram_gb swap_gb swap_mb
@@ -195,9 +222,9 @@ configure_swap() {
     log "Swap active: $(free -h | awk '/Swap:/ {print $2}')"
 }
 
-# ---- STEP 3: Timezone + Locale ---------------------------------------------
+# ---- STEP 4: Timezone + Locale ---------------------------------------------
 configure_time_locale() {
-    step "3/6  Configure timezone ($TIMEZONE) + locale ($LOCALE)"
+    step "4/8  Configure timezone ($TIMEZONE) + locale ($LOCALE)"
 
     # tzdata
     if [ ! -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
@@ -252,9 +279,9 @@ LOCEOF
     log "Locale set: $LOCALE"
 }
 
-# ---- STEP 4: Disable firewall ----------------------------------------------
+# ---- STEP 5: Disable firewall ----------------------------------------------
 disable_firewall() {
-    step "4/6  Disable firewall (all)"
+    step "5/8  Disable firewall (all)"
 
     # ufw
     if command -v ufw >/dev/null 2>&1; then
@@ -309,9 +336,9 @@ disable_firewall() {
     log "Firewall disabled"
 }
 
-# ---- STEP 5: High-concurrency sysctl + ulimit ------------------------------
+# ---- STEP 6: High-concurrency sysctl + ulimit ------------------------------
 apply_sysctl_ulimit() {
-    step "5/6  Apply high-concurrency sysctl + ulimit"
+    step "6/8  Apply high-concurrency sysctl + ulimit"
 
     if [ "$DRY_RUN" = 1 ]; then
         dry "Write /etc/sysctl.d/99-devops-bootstrap.conf and /etc/security/limits.d/99-devops-bootstrap.conf"
@@ -444,9 +471,9 @@ PROFEOF
     log "sysctl + ulimit applied"
 }
 
-# ---- STEP 6: SSH public keys -----------------------------------------------
+# ---- STEP 7: SSH public keys -----------------------------------------------
 install_ssh_keys() {
-    step "6/6  Install SSH public keys for root"
+    step "7/8  Install SSH public keys for root"
 
     if [ "${#SSH_PUBLIC_KEYS[@]}" -eq 0 ]; then
         warn "No SSH_PUBLIC_KEYS defined, skip"; return 0
@@ -503,6 +530,100 @@ install_ssh_keys() {
     fi
 }
 
+# ---- STEP 8: (Optional) Install Docker -------------------------------------
+install_docker() {
+    step "8/8  Install Docker (optional)"
+
+    if command -v docker >/dev/null 2>&1; then
+        log "Docker already installed: $(docker --version 2>/dev/null | head -1)"
+        return 0
+    fi
+
+    # Decide install or not
+    local do_install=0
+    case "$DOCKER_MODE" in
+        yes)
+            do_install=1
+            log "--with-docker specified: proceeding to install Docker"
+            ;;
+        no)
+            log "--no-docker specified: skipping Docker installation"
+            return 0
+            ;;
+        ask)
+            if [ "$ASSUME_YES" = 1 ] || [ ! -t 0 ]; then
+                log "Non-interactive & --with-docker not set: skipping Docker (default off)"
+                log "  Tip: re-run with 'bootstrap.sh --yes --with-docker' to install"
+                return 0
+            fi
+            echo
+            printf '%s%s' "$_CY" "$_CB"
+            cat <<'DOCKEREOF'
+  +----------------------------------------------------------+
+  |  Optional: Install Docker Engine (CE)                    |
+  |                                                          |
+  |    * Uses the official installer: https://get.docker.com |
+  |    * Installs docker-ce + docker CLI + compose plugin    |
+  |    * Enables & starts docker.service (systemd) or        |
+  |      docker/openrc (Alpine)                              |
+  |                                                          |
+  |  Default: NO (safe to skip if you don't need containers) |
+  +----------------------------------------------------------+
+DOCKEREOF
+            printf '%s' "$_C0"
+            local r
+            read -rp "Install Docker now? [y/N] " r
+            if [[ "$r" =~ ^[Yy] ]]; then
+                do_install=1
+            else
+                log "User declined; skipping Docker"
+                return 0
+            fi
+            ;;
+    esac
+    [ "$do_install" = 1 ] || return 0
+
+    # Alpine: use apk (get.docker.com does not officially support Alpine)
+    if [ "$OS_FAMILY" = alpine ]; then
+        log "Installing Docker via apk (Alpine)"
+        pkg_install docker docker-cli-compose
+        if [ "$DRY_RUN" != 1 ]; then
+            rc-update add docker default 2>/dev/null || true
+            rc-service docker start 2>/dev/null || true
+        fi
+        log "Docker: $(docker --version 2>/dev/null || echo '(installed, may need re-login)')"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = 1 ]; then
+        dry "Would download & run: curl -fsSL https://get.docker.com | sh"
+        dry "Would enable + start docker.service"
+        return 0
+    fi
+
+    log "Downloading Docker installer from https://get.docker.com ..."
+    if ! curl -fsSL https://get.docker.com -o /tmp/get-docker.sh; then
+        warn "Failed to download Docker installer, skipping"
+        return 0
+    fi
+    if ! sh /tmp/get-docker.sh; then
+        warn "Docker installation script failed"
+        rm -f /tmp/get-docker.sh
+        return 0
+    fi
+    rm -f /tmp/get-docker.sh
+
+    if [ "$INIT_SYSTEM" = systemd ]; then
+        systemctl enable --now docker 2>/dev/null || true
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        log "Docker installed: $(docker --version)"
+        log "Compose plugin:  $(docker compose version 2>/dev/null || echo 'not detected')"
+    else
+        warn "Docker binary not found after install"
+    fi
+}
 # ---- Final summary ---------------------------------------------------------
 print_summary() {
     echo
@@ -519,6 +640,11 @@ print_summary() {
     printf '  %-14s %s\n' "somaxconn:" "$(sysctl -n net.core.somaxconn 2>/dev/null || echo -)"
     printf '  %-14s %s\n' "file-max:"  "$(sysctl -n fs.file-max 2>/dev/null || echo -)"
     printf '  %-14s %s\n' "nofile:"    "$(ulimit -n 2>/dev/null || echo -)"
+    if command -v docker >/dev/null 2>&1; then
+        printf '  %-14s %s\n' "Docker:"    "$(docker --version 2>/dev/null || echo installed)"
+    else
+        printf '  %-14s %s\n' "Docker:"    "not installed"
+    fi
     printf '  %-14s %s\n' "Log file:"  "$LOG_FILE"
     echo
 
@@ -532,11 +658,13 @@ main() {
     confirm "Continue with VPS initialization?" || die "Aborted by user"
     pkg_update || warn "package index update failed (continuing)"
 
+    install_essentials
     configure_swap
     configure_time_locale
     disable_firewall
     apply_sysctl_ulimit
     install_ssh_keys
+    install_docker
 
     print_summary
 }

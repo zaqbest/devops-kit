@@ -56,11 +56,13 @@ and run it.
 | # | Task | Detail |
 |---|------|--------|
 | 1 | **Detect OS** | Family (debian / rhel / alpine), version, arch (amd64/arm64/…), package manager, init system |
-| 2 | **Swap** | Auto-size based on RAM (≤2G → RAM×2, 2–8G → RAM, >8G → RAM/2, capped at `SWAP_MAX_GB`). Persists in `/etc/fstab`, skipped in containers |
-| 3 | **Timezone + Locale** | `Asia/Shanghai` (UTC+8) + `en_US.UTF-8` |
-| 4 | **Firewall off** | Stops/disables `ufw`, `firewalld`, `nftables`; flushes `iptables`/`ip6tables`; sets SELinux to permissive |
-| 5 | **High-concurrency tuning** | `/etc/sysctl.d/99-devops-bootstrap.conf` + `/etc/security/limits.d/99-devops-bootstrap.conf` + systemd `DefaultLimit*` + PAM `pam_limits` |
-| 6 | **SSH keys** | Appends the keys defined in `SSH_PUBLIC_KEYS` array to `/root/.ssh/authorized_keys` (idempotent, dedup by key body), enables `PubkeyAuthentication yes` |
+| 2 | **Essential packages** | `curl`, `wget`, `git`, `vim`, `tar`, `unzip`, `ca-certificates` + distro-specific extras (`gnupg`, `dnsutils`/`bind-utils`, `net-tools`, `htop`, …) |
+| 3 | **Swap** | Auto-size based on RAM (≤2G → RAM×2, 2–8G → RAM, >8G → RAM/2, capped at `SWAP_MAX_GB`). Persists in `/etc/fstab`, skipped in containers |
+| 4 | **Timezone + Locale** | `Asia/Shanghai` (UTC+8) + `en_US.UTF-8` |
+| 5 | **Firewall off** | Stops/disables `ufw`, `firewalld`, `nftables`; flushes `iptables`/`ip6tables`; sets SELinux to permissive |
+| 6 | **High-concurrency tuning** | `/etc/sysctl.d/99-devops-bootstrap.conf` + `/etc/security/limits.d/99-devops-bootstrap.conf` + systemd `DefaultLimit*` + PAM `pam_limits` |
+| 7 | **SSH keys** | Appends the keys defined in `SSH_PUBLIC_KEYS` array to `/root/.ssh/authorized_keys` (idempotent, dedup by key body), enables `PubkeyAuthentication yes` |
+| 8 | **Docker _(optional)_** | Asks interactively (**default: NO**); installs Docker CE via [`https://get.docker.com`](https://get.docker.com) (or `apk add docker` on Alpine). Non-interactive mode skips unless `--with-docker` is passed |
 
 ### Usage
 
@@ -101,7 +103,9 @@ SSH public keys before deployment.
 
 | Flag | Effect |
 |---|---|
-| `-y`, `--yes` | Non-interactive; assume "yes" to prompts |
+| `-y`, `--yes` | Non-interactive; assume "yes" to prompts (Docker still skipped unless `--with-docker`) |
+| `--with-docker` | Install Docker (skip the confirmation prompt) |
+| `--no-docker` | Never install Docker (skip the confirmation prompt) |
 | `-n`, `--dry-run` | Print commands but don't modify anything |
 | `-h`, `--help` | Show the header comment (usage & feature list) |
 
