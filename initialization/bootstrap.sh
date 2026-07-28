@@ -616,17 +616,37 @@ DOCKEREOF
         return 0
     fi
 
-    log "Downloading Docker installer from https://get.docker.com ..."
-    if ! curl -fsSL https://get.docker.com -o /tmp/get-docker.sh; then
-        warn "Failed to download Docker installer, skipping"
-        return 0
+    # ---- Strategy A: official installer (get.docker.com) ----
+    log "Attempt 1: official installer at https://get.docker.com ..."
+    if curl -fsSL --connect-timeout 10 --max-time 60 https://get.docker.com -o /tmp/get-docker.sh 2>/dev/null; then
+        if sh /tmp/get-docker.sh; then
+            rm -f /tmp/get-docker.sh
+        else
+            warn "get-docker.sh failed to install"
+            rm -f /tmp/get-docker.sh
+        fi
+    else
+        warn "get.docker.com unreachable (network blocked?), will try distro repo"
     fi
-    if ! sh /tmp/get-docker.sh; then
-        warn "Docker installation script failed"
-        rm -f /tmp/get-docker.sh
-        return 0
+
+    # ---- Strategy B: distro package repo (works behind GFW & no network to get.docker.com) ----
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Attempt 2: distro package repository"
+        case "$OS_FAMILY" in
+            debian)
+                # docker.io is in Debian/Ubuntu main repos, docker-compose-plugin usually not
+                pkg_install docker.io docker-compose-plugin 2>/dev/null || \
+                    pkg_install docker.io docker-compose 2>/dev/null || \
+                    pkg_install docker.io || \
+                    warn "distro-installed docker.io failed"
+                ;;
+            rhel)
+                pkg_install docker docker-compose 2>/dev/null || \
+                    pkg_install docker || \
+                    warn "distro-installed docker failed"
+                ;;
+        esac
     fi
-    rm -f /tmp/get-docker.sh
 
     if [ "$INIT_SYSTEM" = systemd ]; then
         systemctl enable --now docker 2>/dev/null || true
@@ -636,7 +656,8 @@ DOCKEREOF
         log "Docker installed: $(docker --version)"
         log "Compose plugin:  $(docker compose version 2>/dev/null || echo 'not detected')"
     else
-        warn "Docker binary not found after install"
+        warn "Docker installation failed via all methods (get.docker.com + distro repo)"
+        warn "Manual install: https://docs.docker.com/engine/install/"
     fi
 }
 # ---- Final summary ---------------------------------------------------------
