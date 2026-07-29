@@ -22,8 +22,8 @@
 # =============================================================================
 set -euo pipefail
 
+# sshkey-per-server-user
 SSH_PUBLIC_KEYS=(
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhbRKu8KG/LuX8i7BZd6s+qU7E1leMkNTGowCISjpK4"
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhbRKu8KG/LuX8i7BZd6s+qU7E1leMkNTGowCISjpK4"
 )
 TIMEZONE="Asia/Shanghai"
