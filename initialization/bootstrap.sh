@@ -12,11 +12,19 @@
 #  8. (Optional) Install Docker via https://get.docker.com  [asked interactively]
 #
 #  Usage:
-#     sudo bash bootstrap.sh                        # interactive (asks about docker)
-#     sudo bash bootstrap.sh --yes                  # non-interactive; docker OFF unless --with-docker
+#     sudo bash bootstrap.sh                        # interactive menu (pick steps)
+#     sudo bash bootstrap.sh --all                  # run all steps 1..8 (old behavior)
+#     sudo bash bootstrap.sh --menu                 # force menu even with --yes
+#     sudo bash bootstrap.sh --steps=1,3,5          # run only these steps
+#     sudo bash bootstrap.sh --steps=2-6            # run a range of steps
+#     sudo bash bootstrap.sh --yes                  # non-interactive; runs --all; docker OFF unless --with-docker
 #     sudo bash bootstrap.sh --yes --with-docker    # non-interactive + install docker
 #     sudo bash bootstrap.sh --no-docker            # never install docker (skip prompt)
 #     sudo bash bootstrap.sh --dry-run              # preview only
+#
+#  Steps:
+#     1) Detect OS      2) Essential pkgs  3) Swap        4) TZ + Locale
+#     5) Firewall off   6) sysctl+ulimit   7) SSH keys    8) Docker (optional)
 #
 #  Supports: Debian/Ubuntu/CentOS/RHEL/Rocky/AlmaLinux/Fedora/Alpine
 # =============================================================================
@@ -32,13 +40,18 @@ SWAP_MAX_GB=8
 LOG_FILE="/var/log/devops-bootstrap.log"
 
 ASSUME_YES=0; DRY_RUN=0; DOCKER_MODE=ask   # ask | yes | no
+RUN_MODE=auto                              # auto | menu | all | steps
+STEPS_ARG=""
 for arg in "$@"; do
     case "$arg" in
         -y|--yes)      ASSUME_YES=1 ;;
         -n|--dry-run)  DRY_RUN=1 ;;
         --with-docker) DOCKER_MODE=yes ;;
         --no-docker)   DOCKER_MODE=no ;;
-        -h|--help)     sed -n '2,25p' "$0"; exit 0 ;;
+        --menu)        RUN_MODE=menu ;;
+        --all)         RUN_MODE=all ;;
+        --steps=*)     RUN_MODE=steps; STEPS_ARG="${arg#--steps=}" ;;
+        -h|--help)     sed -n '2,32p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
@@ -687,20 +700,155 @@ print_summary() {
     log "All done. Reboot recommended for full effect: sudo reboot"
 }
 
+# ---- Step dispatcher --------------------------------------------------------
+# Map step number -> function name + short label
+STEP_FUNCS=(
+    ""                          # index 0 unused so users see 1-based numbers
+    "install_essentials"
+    "configure_swap"
+    "configure_time_locale"
+    "disable_firewall"
+    "apply_sysctl_ulimit"
+    "install_ssh_keys"
+    "install_docker"
+)
+STEP_LABELS=(
+    ""
+    "Install essential packages (curl/wget/git/vim/…)"
+    "Configure swap based on RAM"
+    "Set timezone ($TIMEZONE) + locale ($LOCALE)"
+    "Disable firewall (ufw/firewalld/iptables/nftables)"
+    "High-concurrency sysctl + ulimit"
+    "Install SSH public keys for root"
+    "Install Docker (optional)"
+)
+STEP_COUNT=7   # step 1 = detect_os, always run before others; 1..7 above are steps 2..8
+
+# Parse "1,3,5" / "2-6" / "1,3-5,8" into a sorted-unique list of ints (1..8)
+# Step 1 = OS detect (always forced on), steps 2..8 map to STEP_FUNCS[1..7].
+parse_steps() {
+    local spec=$1 out="" part a b i
+    IFS=',' read -ra parts <<<"$spec"
+    for part in "${parts[@]}"; do
+        part=$(echo "$part" | tr -d '[:space:]')
+        [ -z "$part" ] && continue
+        if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            a=${BASH_REMATCH[1]}; b=${BASH_REMATCH[2]}
+            [ "$a" -gt "$b" ] && { i=$a; a=$b; b=$i; }
+            for ((i=a; i<=b; i++)); do out+="$i "; done
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
+            out+="$part "
+        else
+            die "Invalid step token: '$part' (use e.g. 1,3-5,8)"
+        fi
+    done
+    # sort unique, keep in range 1..8
+    echo "$out" | tr ' ' '\n' | awk 'NF && $1>=1 && $1<=8' | sort -nu | tr '\n' ' '
+}
+
+run_step() {
+    # $1 = step number 1..8
+    local n=$1
+    case "$n" in
+        1) detect_os ;;
+        2|3|4|5|6|7|8)
+            local fn="${STEP_FUNCS[$((n-1))]}"
+            "$fn"
+            ;;
+        *) warn "Unknown step: $n" ;;
+    esac
+}
+
+# Interactive menu: user picks steps
+show_menu() {
+    echo
+    printf '%s%s  Select steps to run (space or comma separated, e.g. 1,3-5)%s\n' "$_CC" "$_CB" "$_C0"
+    printf '  %s0)%s  Run ALL steps (1..8)\n' "$_CG" "$_C0"
+    printf '  %s1)%s  Detect OS  %s[always runs]%s\n' "$_CG" "$_C0" "$_CY" "$_C0"
+    local i
+    for i in $(seq 2 8); do
+        printf '  %s%d)%s  %s\n' "$_CG" "$i" "$_C0" "${STEP_LABELS[$((i-1))]}"
+    done
+    printf '  %sq)%s  Quit\n' "$_CG" "$_C0"
+    echo
+}
+
+pick_steps_interactive() {
+    if [ "$HAS_TTY" != 1 ]; then
+        die "Menu requested but no TTY available. Use --steps=... or --all instead."
+    fi
+    local sel
+    while :; do
+        show_menu
+        read -rp "Your choice: " sel </dev/tty || die "read failed"
+        sel=$(echo "$sel" | tr -d '[:space:]')
+        case "$sel" in
+            q|Q|quit|exit) log "User quit"; exit 0 ;;
+            0|all|ALL|"") STEPS_TO_RUN="1 2 3 4 5 6 7 8"; return 0 ;;
+            *)
+                local parsed
+                parsed=$(parse_steps "$sel" 2>/dev/null) || { warn "Invalid input, try again"; continue; }
+                if [ -z "$parsed" ]; then
+                    warn "No valid step numbers, try again"; continue
+                fi
+                # Always include step 1 (OS detect) since other steps depend on it
+                STEPS_TO_RUN=$(echo "1 $parsed" | tr ' ' '\n' | sort -nu | tr '\n' ' ')
+                return 0
+                ;;
+        esac
+    done
+}
+
 # ---- Main -------------------------------------------------------------------
 main() {
     banner
-    detect_os
-    confirm "Continue with VPS initialization?" || die "Aborted by user"
-    pkg_update || warn "package index update failed (continuing)"
 
-    install_essentials
-    configure_swap
-    configure_time_locale
-    disable_firewall
-    apply_sysctl_ulimit
-    install_ssh_keys
-    install_docker
+    # Resolve which mode we're in
+    if [ "$RUN_MODE" = auto ]; then
+        # auto: menu if interactive TTY and no --yes; else run all
+        if [ "$ASSUME_YES" = 1 ] || [ "$HAS_TTY" != 1 ]; then
+            RUN_MODE=all
+        else
+            RUN_MODE=menu
+        fi
+    fi
+
+    STEPS_TO_RUN=""
+    case "$RUN_MODE" in
+        all)
+            STEPS_TO_RUN="1 2 3 4 5 6 7 8"
+            ;;
+        steps)
+            [ -n "$STEPS_ARG" ] || die "--steps requires a value, e.g. --steps=1,3-5"
+            STEPS_TO_RUN=$(parse_steps "$STEPS_ARG")
+            [ -n "$STEPS_TO_RUN" ] || die "No valid steps parsed from: $STEPS_ARG"
+            # Ensure step 1 always runs first (needed for OS_FAMILY/PKG_MGR etc.)
+            STEPS_TO_RUN=$(echo "1 $STEPS_TO_RUN" | tr ' ' '\n' | sort -nu | tr '\n' ' ')
+            ;;
+        menu)
+            pick_steps_interactive
+            ;;
+    esac
+
+    log "Steps to run: $STEPS_TO_RUN"
+    confirm "Continue with these steps?" || die "Aborted by user"
+
+    # detect_os is a no-op-safe prerequisite for anything using PKG_MGR / OS_FAMILY
+    local need_pkg_update=0 s
+    for s in $STEPS_TO_RUN; do
+        case "$s" in 2|4|8) need_pkg_update=1 ;; esac
+    done
+
+    for s in $STEPS_TO_RUN; do
+        if [ "$s" = 1 ]; then
+            run_step 1
+            if [ "$need_pkg_update" = 1 ]; then
+                pkg_update || warn "package index update failed (continuing)"
+            fi
+        else
+            run_step "$s"
+        fi
+    done
 
     print_summary
 }
