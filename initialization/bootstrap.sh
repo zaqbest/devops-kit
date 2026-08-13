@@ -2,18 +2,18 @@
 # =============================================================================
 #  bootstrap.sh - Standalone VPS post-install initialization
 # -----------------------------------------------------------------------------
-#  1. Detect OS (type/version/arch/pkgmgr)
+#  Prereq. Detect OS (type/version/arch/pkgmgr)  [auto, always runs]
+#  1. Install SSH public keys into root's authorized_keys
 #  2. Install essential packages (curl, wget, git, vim, tar, unzip, ...)
 #  3. Create appropriately sized swap based on RAM
 #  4. Set locale (en_US.UTF-8) + timezone Asia/Shanghai (UTC+8)
 #  5. Disable firewall (ufw/firewalld/iptables/nftables)
 #  6. Apply high-concurrency kernel/ulimit tuning
-#  7. Install SSH public keys into root's authorized_keys
-#  8. (Optional) Install Docker via https://get.docker.com  [asked interactively]
+#  7. (Optional) Install Docker via https://get.docker.com  [asked interactively]
 #
 #  Usage:
 #     sudo bash bootstrap.sh                        # interactive menu (pick steps)
-#     sudo bash bootstrap.sh --all                  # run all steps 1..8 (old behavior)
+#     sudo bash bootstrap.sh --all                  # run all steps 1..7
 #     sudo bash bootstrap.sh --menu                 # force menu even with --yes
 #     sudo bash bootstrap.sh --steps=1,3,5          # run only these steps
 #     sudo bash bootstrap.sh --steps=2-6            # run a range of steps
@@ -23,8 +23,8 @@
 #     sudo bash bootstrap.sh --dry-run              # preview only
 #
 #  Steps:
-#     1) Detect OS      2) Essential pkgs  3) Swap        4) TZ + Locale
-#     5) Firewall off   6) sysctl+ulimit   7) SSH keys    8) Docker (optional)
+#     1) SSH keys        2) Essential pkgs   3) Swap        4) TZ + Locale
+#     5) Firewall off    6) sysctl+ulimit    7) Docker (optional)
 #
 #  Supports: Debian/Ubuntu/CentOS/RHEL/Rocky/AlmaLinux/Fedora/Alpine
 # =============================================================================
@@ -51,7 +51,7 @@ for arg in "$@"; do
         --menu)        RUN_MODE=menu ;;
         --all)         RUN_MODE=all ;;
         --steps=*)     RUN_MODE=steps; STEPS_ARG="${arg#--steps=}" ;;
-        -h|--help)     sed -n '2,32p' "$0"; exit 0 ;;
+        -h|--help)     sed -n '2,30p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
@@ -118,7 +118,7 @@ is_container() {
 
 # ---- STEP 1: OS detection ---------------------------------------------------
 detect_os() {
-    step "1/8  Detect operating system"
+    step "Detect operating system  [prerequisite]"
     OS_ID=""; OS_VERSION_ID=""; OS_PRETTY=""; OS_FAMILY="unknown"; PKG_MGR="unknown"
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -181,7 +181,7 @@ pkg_install() {
 
 # ---- STEP 2: Install essential packages ------------------------------------
 install_essentials() {
-    step "2/8  Install essential packages"
+    step "2/7  Install essential packages"
     local common="curl wget git vim tar unzip ca-certificates"
     local extra=""
     case "$OS_FAMILY" in
@@ -202,7 +202,7 @@ install_essentials() {
 
 # ---- STEP 3: Swap -----------------------------------------------------------
 configure_swap() {
-    step "3/8  Configure swap based on RAM"
+    step "3/7  Configure swap based on RAM"
     if is_container; then warn "Container env, skipping swap"; return 0; fi
 
     local ram_kb ram_mb ram_gb swap_gb swap_mb
@@ -252,7 +252,7 @@ configure_swap() {
 
 # ---- STEP 4: Timezone + Locale ---------------------------------------------
 configure_time_locale() {
-    step "4/8  Configure timezone ($TIMEZONE) + locale ($LOCALE)"
+    step "4/7  Configure timezone ($TIMEZONE) + locale ($LOCALE)"
 
     # tzdata
     if [ ! -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
@@ -309,7 +309,7 @@ LOCEOF
 
 # ---- STEP 5: Disable firewall ----------------------------------------------
 disable_firewall() {
-    step "5/8  Disable firewall (all)"
+    step "5/7  Disable firewall (all)"
 
     # ufw
     if command -v ufw >/dev/null 2>&1; then
@@ -366,7 +366,7 @@ disable_firewall() {
 
 # ---- STEP 6: High-concurrency sysctl + ulimit ------------------------------
 apply_sysctl_ulimit() {
-    step "6/8  Apply high-concurrency sysctl + ulimit"
+    step "6/7  Apply high-concurrency sysctl + ulimit"
 
     if [ "$DRY_RUN" = 1 ]; then
         dry "Write /etc/sysctl.d/99-devops-bootstrap.conf and /etc/security/limits.d/99-devops-bootstrap.conf"
@@ -501,7 +501,7 @@ PROFEOF
 
 # ---- STEP 7: SSH public keys -----------------------------------------------
 install_ssh_keys() {
-    step "7/8  Install SSH public keys for root"
+    step "1/7  Install SSH public keys for root"
 
     if [ "${#SSH_PUBLIC_KEYS[@]}" -eq 0 ]; then
         warn "No SSH_PUBLIC_KEYS defined, skip"; return 0
@@ -560,7 +560,7 @@ install_ssh_keys() {
 
 # ---- STEP 8: (Optional) Install Docker -------------------------------------
 install_docker() {
-    step "8/8  Install Docker (optional)"
+    step "7/7  Install Docker (optional)"
 
     if command -v docker >/dev/null 2>&1; then
         log "Docker already installed: $(docker --version 2>/dev/null | head -1)"
@@ -701,31 +701,31 @@ print_summary() {
 }
 
 # ---- Step dispatcher --------------------------------------------------------
-# Map step number -> function name + short label
+# Map step number -> function name + short label. detect_os is NOT numbered;
+# it's a prerequisite that always runs first via main().
 STEP_FUNCS=(
     ""                          # index 0 unused so users see 1-based numbers
+    "install_ssh_keys"
     "install_essentials"
     "configure_swap"
     "configure_time_locale"
     "disable_firewall"
     "apply_sysctl_ulimit"
-    "install_ssh_keys"
     "install_docker"
 )
 STEP_LABELS=(
     ""
+    "Install SSH public keys for root"
     "Install essential packages (curl/wget/git/vim/…)"
     "Configure swap based on RAM"
     "Set timezone ($TIMEZONE) + locale ($LOCALE)"
     "Disable firewall (ufw/firewalld/iptables/nftables)"
     "High-concurrency sysctl + ulimit"
-    "Install SSH public keys for root"
     "Install Docker (optional)"
 )
-STEP_COUNT=7   # step 1 = detect_os, always run before others; 1..7 above are steps 2..8
+STEP_COUNT=7
 
-# Parse "1,3,5" / "2-6" / "1,3-5,8" into a sorted-unique list of ints (1..8)
-# Step 1 = OS detect (always forced on), steps 2..8 map to STEP_FUNCS[1..7].
+# Parse "1,3,5" / "2-6" / "1,3-5,7" into a sorted-unique list of ints (1..7).
 parse_steps() {
     local spec=$1 out="" part a b i
     IFS=',' read -ra parts <<<"$spec"
@@ -739,35 +739,31 @@ parse_steps() {
         elif [[ "$part" =~ ^[0-9]+$ ]]; then
             out+="$part "
         else
-            die "Invalid step token: '$part' (use e.g. 1,3-5,8)"
+            die "Invalid step token: '$part' (use e.g. 1,3-5,7)"
         fi
     done
-    # sort unique, keep in range 1..8
-    echo "$out" | tr ' ' '\n' | awk 'NF && $1>=1 && $1<=8' | sort -nu | tr '\n' ' '
+    # sort unique, keep in range 1..STEP_COUNT
+    echo "$out" | tr ' ' '\n' | awk -v max="$STEP_COUNT" 'NF && $1>=1 && $1<=max' | sort -nu | tr '\n' ' '
 }
 
 run_step() {
-    # $1 = step number 1..8
+    # $1 = step number 1..STEP_COUNT
     local n=$1
-    case "$n" in
-        1) detect_os ;;
-        2|3|4|5|6|7|8)
-            local fn="${STEP_FUNCS[$((n-1))]}"
-            "$fn"
-            ;;
-        *) warn "Unknown step: $n" ;;
-    esac
+    if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "$STEP_COUNT" ]; then
+        "${STEP_FUNCS[$n]}"
+    else
+        warn "Unknown step: $n"
+    fi
 }
 
-# Interactive menu: user picks steps
+# Interactive menu: user picks steps. Menu numbering == internal step numbering.
 show_menu() {
     echo
     printf '%s%s  Select steps to run (space or comma separated, e.g. 1,3-5)%s\n' "$_CC" "$_CB" "$_C0"
-    printf '  %s0)%s  Run ALL steps (1..8)\n' "$_CG" "$_C0"
-    printf '  %s1)%s  Detect OS  %s[always runs]%s\n' "$_CG" "$_C0" "$_CY" "$_C0"
+    printf '  %s0)%s  Run ALL steps\n' "$_CG" "$_C0"
     local i
-    for i in $(seq 2 8); do
-        printf '  %s%d)%s  %s\n' "$_CG" "$i" "$_C0" "${STEP_LABELS[$((i-1))]}"
+    for ((i=1; i<=STEP_COUNT; i++)); do
+        printf '  %s%d)%s  %s\n' "$_CG" "$i" "$_C0" "${STEP_LABELS[$i]}"
     done
     printf '  %sq)%s  Quit\n' "$_CG" "$_C0"
     echo
@@ -777,22 +773,20 @@ pick_steps_interactive() {
     if [ "$HAS_TTY" != 1 ]; then
         die "Menu requested but no TTY available. Use --steps=... or --all instead."
     fi
-    local sel
+    local sel parsed
     while :; do
         show_menu
         read -rp "Your choice: " sel </dev/tty || die "read failed"
         sel=$(echo "$sel" | tr -d '[:space:]')
         case "$sel" in
             q|Q|quit|exit) log "User quit"; exit 0 ;;
-            0|all|ALL|"") STEPS_TO_RUN="1 2 3 4 5 6 7 8"; return 0 ;;
+            0|all|ALL|"")  STEPS_TO_RUN=$(seq -s' ' 1 "$STEP_COUNT"); return 0 ;;
             *)
-                local parsed
                 parsed=$(parse_steps "$sel" 2>/dev/null) || { warn "Invalid input, try again"; continue; }
                 if [ -z "$parsed" ]; then
                     warn "No valid step numbers, try again"; continue
                 fi
-                # Always include step 1 (OS detect) since other steps depend on it
-                STEPS_TO_RUN=$(echo "1 $parsed" | tr ' ' '\n' | sort -nu | tr '\n' ' ')
+                STEPS_TO_RUN="$parsed"
                 return 0
                 ;;
         esac
@@ -802,6 +796,9 @@ pick_steps_interactive() {
 # ---- Main -------------------------------------------------------------------
 main() {
     banner
+
+    # Prerequisite: always detect OS so PKG_MGR / OS_FAMILY are set for any step
+    detect_os
 
     # Resolve which mode we're in
     if [ "$RUN_MODE" = auto ]; then
@@ -816,14 +813,12 @@ main() {
     STEPS_TO_RUN=""
     case "$RUN_MODE" in
         all)
-            STEPS_TO_RUN="1 2 3 4 5 6 7 8"
+            STEPS_TO_RUN=$(seq -s' ' 1 "$STEP_COUNT")
             ;;
         steps)
             [ -n "$STEPS_ARG" ] || die "--steps requires a value, e.g. --steps=1,3-5"
             STEPS_TO_RUN=$(parse_steps "$STEPS_ARG")
             [ -n "$STEPS_TO_RUN" ] || die "No valid steps parsed from: $STEPS_ARG"
-            # Ensure step 1 always runs first (needed for OS_FAMILY/PKG_MGR etc.)
-            STEPS_TO_RUN=$(echo "1 $STEPS_TO_RUN" | tr ' ' '\n' | sort -nu | tr '\n' ' ')
             ;;
         menu)
             pick_steps_interactive
@@ -833,21 +828,18 @@ main() {
     log "Steps to run: $STEPS_TO_RUN"
     confirm "Continue with these steps?" || die "Aborted by user"
 
-    # detect_os is a no-op-safe prerequisite for anything using PKG_MGR / OS_FAMILY
+    # Refresh package index once, if any package-installing step is selected
+    # (2=essentials, 4=TZ+locale/tzdata+locales, 7=Docker).
     local need_pkg_update=0 s
     for s in $STEPS_TO_RUN; do
-        case "$s" in 2|4|8) need_pkg_update=1 ;; esac
+        case "$s" in 2|4|7) need_pkg_update=1 ;; esac
     done
+    if [ "$need_pkg_update" = 1 ]; then
+        pkg_update || warn "package index update failed (continuing)"
+    fi
 
     for s in $STEPS_TO_RUN; do
-        if [ "$s" = 1 ]; then
-            run_step 1
-            if [ "$need_pkg_update" = 1 ]; then
-                pkg_update || warn "package index update failed (continuing)"
-            fi
-        else
-            run_step "$s"
-        fi
+        run_step "$s"
     done
 
     print_summary
