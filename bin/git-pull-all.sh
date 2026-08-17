@@ -1,1 +1,0 @@
-../tools/git/git-pull-all.sh

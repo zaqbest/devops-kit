@@ -184,19 +184,82 @@ Batch operations across multiple Git repositories under a parent folder.
 
 | Script | Purpose |
 |---|---|
-| `tools/git/git-pull-all.sh` | `git pull` in every immediate sub-repo |
-| `tools/git/git-fetch-all.sh` | `git fetch --all` in every immediate sub-repo |
+| `tools/git/git-sync-all.sh` | Fetch remotes + FF all branches + pull current, across every immediate sub-repo (two subcommands: `fetch`, `pull`) |
 | `tools/git/git-diff.sh` | Show unstaged/staged/unpushed changes across repos |
 
-`bin/git-pull-all.sh`, `bin/git-fetch-all.sh`, `bin/git-diff-sh` are shortcut
-copies for adding `bin/` to your `$PATH`.
+`bin/git-sync-all.sh`, `bin/git-diff-sh` are shortcut copies for adding `bin/`
+to your `$PATH`.
+
+### `git-sync-all.sh`
+
+Two subcommands. `fetch` is the default when none is given.
+
+**`fetch` (default)** — for every local branch of every repo, in this order:
+
+1. `git fetch --all --prune --tags` (updates remote-tracking refs only)
+2. For each **non-current** local branch with an upstream that can fast-forward:
+   `git fetch <remote> <rbranch>:<lbranch>` — updates the local branch without
+   switching to it.
+3. On the **current** branch: `git pull --ff-only`.
+
+Diverged / no-upstream branches are reported and skipped.
+
+**`pull`** — plain `git pull` on the current branch of each repo. Leaves all
+other local branches untouched.
+
+**Tag handling** is temperate by default: `--tags` is passed to fetch, but
+local tags are NOT force-overwritten. If the remote force-moved a tag you
+already have locally, git will reject the fetch with a _"would clobber existing
+tag"_ error. To resolve:
+
+| Flag | Effect |
+|---|---|
+| `--force-tags` | Mirror remote tags exactly: adds `--prune-tags` + `--force`, so force-moved remote tags overwrite the local ones, and local tags no longer on the remote are deleted. Only touches local refs — `fetch` never mutates the remote. |
+| `--no-tags` | Skip tag sync entirely (still fetches branches). |
+| `--prune-tags` | Deprecated alias for `--force-tags`, kept for compat. |
+
+Other `fetch` flags:
+
+| Flag | Effect |
+|---|---|
+| `--fetch-only` | Do not pull the current branch (steps 1 + 2 only). |
+| `--remote <name>` | Restrict to a single remote instead of `--all`. |
+
+`pull` flags:
+
+| Flag | Effect |
+|---|---|
+| `--ff-only` | Refuse non-fast-forward merges (safer). |
+| `--rebase` | Rebase local commits on top of the remote instead of merging. |
+
+Directory resolution: if the argument is itself a git repo it's processed
+directly; otherwise one level of subdirectories is scanned and every
+subdirectory that is a git repo is processed.
 
 Usage:
 
 ```bash
 cd ~/workspace         # a directory containing many Git repos
-bash ~/devops-kit/tools/git/git-pull-all.sh
-bash ~/devops-kit/tools/git/git-fetch-all.sh
+
+# Default: fetch all remotes, FF every branch, and pull the current branch
+bash ~/devops-kit/tools/git/git-sync-all.sh
+
+# Same, but leave the current branch alone
+bash ~/devops-kit/tools/git/git-sync-all.sh --fetch-only
+
+# When a repo has tags that were force-moved on the remote (e.g. CI-managed
+# `last-released/*` tags), rerun with --force-tags to mirror remote tags:
+bash ~/devops-kit/tools/git/git-sync-all.sh fetch --force-tags
+
+# Or skip tags entirely
+bash ~/devops-kit/tools/git/git-sync-all.sh fetch --no-tags
+
+# Restrict to a single remote
+bash ~/devops-kit/tools/git/git-sync-all.sh fetch --remote origin
+
+# Plain `git pull` on the current branch only (does not touch other branches)
+bash ~/devops-kit/tools/git/git-sync-all.sh pull --ff-only
+
 bash ~/devops-kit/tools/git/git-diff.sh
 ```
 

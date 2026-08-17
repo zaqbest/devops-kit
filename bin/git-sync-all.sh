@@ -1,0 +1,1 @@
+../tools/git/git-sync-all.sh
