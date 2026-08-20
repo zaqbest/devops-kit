@@ -7,9 +7,9 @@
 #   git-diff.sh [--no-remote] <target-branch> [<current-dir>]
 #     default mode: compare a branch with a working directory (target branch vs current-dir; current-dir defaults to the current directory)
 #
-# By default, both modes run `git fetch` to refresh remote refs before comparing,
-# and prefer the remote-tracking branch (e.g. origin/<branch>) over the local branch
-# to ensure the latest commits are used. Use --no-remote to force using local branches.
+# By default, prefers the remote-tracking branch (e.g. origin/<branch>) over the local branch.
+# Use --no-remote to force using local branches.
+# Note: this script does NOT fetch/pull — run git-sync-all.sh beforehand to refresh remote refs.
 
 set -e
 
@@ -65,11 +65,7 @@ if [ ! -d "$REPO_DIR/.git" ] && [ ! -d "$REPO_DIR/../.git" ]; then
   exit 1
 fi
 
-# Refresh remote refs
-if [ "$USE_REMOTE" -eq 1 ]; then
-  echo "🔄 Running git fetch --all --prune to refresh remote refs..."
-  git -C "$REPO_DIR" fetch --all --prune
-fi
+# Refresh remote refs is delegated to git-sync-all.sh — no fetch here.
 
 # Resolve a branch name to the ref used for archive.
 # If USE_REMOTE=1 and remote-tracking ref exists, prefer it; otherwise use the local branch.
