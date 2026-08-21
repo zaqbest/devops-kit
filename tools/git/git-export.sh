@@ -8,8 +8,8 @@
 # By default, prefers the local ref; if not found, falls back to the remote-tracking
 # ref (origin/<ref>) with a warning. The output directory name encodes the ref name
 # and whether it was resolved locally or from the remote, e.g.:
-#   /tmp/git-export-<ref>-local-<pid>
-#   /tmp/git-export-<ref>-remote-origin-<pid>
+#   /tmp/git-export-<repo>-<ref>-local-<pid>
+#   /tmp/git-export-<repo>-<ref>-remote-origin-<pid>
 #
 # Options:
 #   --remote <name>   Remote name for tracking refs (default: origin)
@@ -145,11 +145,13 @@ echo "ℹ️  Commit: $SHORT_SHA"
 
 # Compute output directory
 SAFE_REF="${REF_INPUT//\//_}"
+REPO_NAME="$(basename "$(git -C "$REPO_DIR" rev-parse --show-toplevel)")"
+SAFE_REPO="${REPO_NAME//\//_}"
 if [ -z "$OUT_DIR" ]; then
   if [ "$SOURCE" = "remote" ]; then
-    OUT_DIR="/tmp/git-export-${SAFE_REF}-remote-${REMOTE_NAME}-$$"
+    OUT_DIR="/tmp/git-export-${SAFE_REPO}-${SAFE_REF}-remote-${REMOTE_NAME}-$$"
   else
-    OUT_DIR="/tmp/git-export-${SAFE_REF}-${SOURCE}-$$"
+    OUT_DIR="/tmp/git-export-${SAFE_REPO}-${SAFE_REF}-${SOURCE}-$$"
   fi
 fi
 
