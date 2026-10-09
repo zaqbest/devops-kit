@@ -26,6 +26,9 @@ multi-architecture manifest is created using the original target tag:
   registry.cn-hangzhou.aliyuncs.com/my-space/nginx:1.27-arm64
   registry.cn-hangzhou.aliyuncs.com/my-space/nginx:1.27
 
+When the target tag is not latest, the same multi-architecture manifest is
+also published as latest.
+
 Set these environment variables to let this script log in automatically:
   export ACR_USERNAME="your-aliyun-username"
   export ACR_PASSWORD="your-aliyun-password"
@@ -169,5 +172,25 @@ done
 echo "[INFO] Pushing multi-architecture manifest ${TARGET_MANIFEST}..."
 docker manifest push "$TARGET_MANIFEST"
 docker manifest rm "$TARGET_MANIFEST" >/dev/null 2>&1 || true
+
+if [[ "$TARGET_TAG" != "latest" ]]; then
+    LATEST_MANIFEST="${REGISTRY}/${TARGET_REPOSITORY}:latest"
+    echo "[INFO] Creating latest manifest ${LATEST_MANIFEST}..."
+    docker manifest rm "$LATEST_MANIFEST" >/dev/null 2>&1 || true
+    docker manifest create "$LATEST_MANIFEST" "${ARCH_IMAGES[@]}"
+
+    for INDEX in "${!ARCHES[@]}"; do
+        ARCH="${ARCHES[$INDEX]}"
+        ARCH_IMAGE="${ARCH_IMAGES[$INDEX]}"
+        docker manifest annotate "$LATEST_MANIFEST" "$ARCH_IMAGE" \
+            --os linux \
+            --arch "$ARCH"
+    done
+
+    echo "[INFO] Pushing latest manifest ${LATEST_MANIFEST}..."
+    docker manifest push "$LATEST_MANIFEST"
+    docker manifest rm "$LATEST_MANIFEST" >/dev/null 2>&1 || true
+    echo "[DONE] Published latest manifest: ${LATEST_MANIFEST}"
+fi
 
 echo "[DONE] Synced ${SOURCE_IMAGE} to ${TARGET_MANIFEST}"
