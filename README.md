@@ -42,6 +42,8 @@ devops-kit/
 │   ├── elasticsearch/       # Elasticsearch export/import via elasticdump
 │   └── git/                 # Multi-repo Git helpers (pull/fetch/diff)
 └── bin/                     # Convenience symlinks/copies of frequently used scripts
+    ├── docker-export.sh     # Pull and export a Docker image for a target architecture
+    └── docker-import.sh     # Import a Docker image archive into the local daemon
 ```
 
 
