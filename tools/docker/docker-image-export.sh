@@ -7,34 +7,35 @@ usage() {
 Usage:
   docker-image-export.sh [options] <image[:tag|@digest]>
 
-Pull a Docker Hub image for a specific architecture and export it as a gzip
-compressed Docker archive. The default architecture is amd64.
+Pull a Docker Hub image for one or more architectures and export each one as
+a gzip-compressed Docker archive under ./images. The local image is removed
+after export.
+The default architectures are amd64 and arm64.
 
 Options:
-  -a, --arch <arch>       Target architecture (default: amd64)
-  -o, --output <file>     Output archive (default: ./<image>-<arch>.tar.gz)
+  -a, --arch <arch>       Target architecture; repeat or use comma-separated values
+                          (default: amd64,arm64)
   -h, --help              Show this help
 
 Examples:
   docker-image-export.sh nginx:1.27
-  docker-image-export.sh --arch arm64 --output ./nginx-arm64.tar.gz nginx:1.27
+  docker-image-export.sh --arch arm64 nginx:1.27
+  docker-image-export.sh --arch amd64,arm64 nginx:1.27
 EOF
 }
 
-ARCH="amd64"
-OUTPUT=""
+ARCHES=("amd64" "arm64")
 IMAGE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -a|--arch)
             [[ $# -ge 2 ]] || { echo "[ERROR] --arch requires a value." >&2; exit 1; }
-            ARCH="$2"
-            shift 2
-            ;;
-        -o|--output)
-            [[ $# -ge 2 ]] || { echo "[ERROR] --output requires a value." >&2; exit 1; }
-            OUTPUT="$2"
+            if [[ "${ARCHES[*]}" == "amd64 arm64" ]]; then
+                ARCHES=()
+            fi
+            IFS=',' read -r -a REQUESTED_ARCHES <<< "$2"
+            ARCHES+=("${REQUESTED_ARCHES[@]}")
             shift 2
             ;;
         -h|--help)
@@ -60,37 +61,46 @@ if [[ -z "$IMAGE" ]]; then
     exit 1
 fi
 
-if [[ ! "$ARCH" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "[ERROR] Invalid architecture: $ARCH" >&2
-    exit 1
-fi
+[[ ${#ARCHES[@]} -gt 0 ]] || { echo "[ERROR] At least one architecture is required." >&2; exit 1; }
+
+for ARCH in "${ARCHES[@]}"; do
+    if [[ ! "$ARCH" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "[ERROR] Invalid architecture: $ARCH" >&2
+        exit 1
+    fi
+done
 
 command -v docker >/dev/null 2>&1 || { echo "[ERROR] docker command not found." >&2; exit 1; }
 command -v gzip >/dev/null 2>&1 || { echo "[ERROR] gzip command not found." >&2; exit 1; }
 
-if [[ -z "$OUTPUT" ]]; then
-    SAFE_IMAGE="${IMAGE//\//@}"
-    SAFE_IMAGE="${SAFE_IMAGE//\//_}"
-    SAFE_IMAGE="${SAFE_IMAGE//:/_}"
-    OUTPUT="./${SAFE_IMAGE}-${ARCH}.tar.gz"
-fi
-
-if [[ -e "$OUTPUT" ]]; then
-    echo "[ERROR] Output file already exists: $OUTPUT" >&2
-    exit 1
-fi
-
-OUTPUT_DIR="$(dirname "$OUTPUT")"
+SAFE_IMAGE="${IMAGE//\//@}"
+SAFE_IMAGE="${SAFE_IMAGE//\//_}"
+SAFE_IMAGE="${SAFE_IMAGE//:/_}"
+OUTPUT_DIR="./images"
 mkdir -p "$OUTPUT_DIR"
 
-echo "[INFO] Pulling ${IMAGE} for linux/${ARCH}..."
-docker pull --platform "linux/${ARCH}" "$IMAGE"
+for ARCH in "${ARCHES[@]}"; do
+    ARCH_OUTPUT="${OUTPUT_DIR}/${SAFE_IMAGE}-${ARCH}.tar.gz"
 
-echo "[INFO] Saving image to ${OUTPUT}..."
-if ! docker save "$IMAGE" | gzip -c > "$OUTPUT"; then
-    rm -f "$OUTPUT"
-    echo "[ERROR] Failed to export image." >&2
-    exit 1
-fi
+    if [[ -e "$ARCH_OUTPUT" ]]; then
+        echo "[ERROR] Output file already exists: $ARCH_OUTPUT" >&2
+        exit 1
+    fi
 
-echo "[DONE] Image archive created: $OUTPUT"
+    echo "[INFO] Pulling ${IMAGE} for linux/${ARCH}..."
+    docker pull --platform "linux/${ARCH}" "$IMAGE"
+
+    echo "[INFO] Saving image to ${ARCH_OUTPUT}..."
+    if ! docker save "$IMAGE" | gzip -c > "$ARCH_OUTPUT"; then
+        rm -f "$ARCH_OUTPUT"
+        docker image rm "$IMAGE" >/dev/null 2>&1 || true
+        echo "[ERROR] Failed to export image for ${ARCH}." >&2
+        exit 1
+    fi
+
+    echo "[DONE] Image archive created: $ARCH_OUTPUT"
+    echo "[INFO] Removing local image ${IMAGE}..."
+    docker image rm "$IMAGE" >/dev/null 2>&1 || {
+        echo "[WARN] Failed to remove local image: $IMAGE" >&2
+    }
+done
