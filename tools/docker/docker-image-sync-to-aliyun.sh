@@ -17,8 +17,9 @@ Pull an image from Docker Hub and push it to Alibaba Cloud Container Registry.
 The default Alibaba Cloud namespace is zaqbest. It can be changed with:
   export ACR_NAMESPACE="your-aliyun-namespace"
 
-The target image can be specified as repository[:tag], for example nginx:1.27.
-You may also specify namespace/repository[:tag] explicitly.
+The target image is always placed under the configured Alibaba Cloud namespace.
+For Personal Edition registries, only one repository level is supported, so
+sonatype/nexus3:3.94.2 is published as zaqbest/nexus3:3.94.2.
 
 Each architecture is first pushed with an architecture suffix, then a
 multi-architecture manifest is created using the original target tag:
@@ -98,11 +99,6 @@ for ARCH in "${ARCHES[@]}"; do
     fi
 done
 
-if [[ "$TARGET_IMAGE" == */*/* ]]; then
-    echo "[ERROR] Target image must be in the form <repository>[:tag] or <namespace>/<repository>[:tag]." >&2
-    exit 1
-fi
-
 if [[ "$TARGET_IMAGE" == *@* ]]; then
     echo "[ERROR] Target image must use a tag, not a digest." >&2
     exit 1
@@ -110,9 +106,11 @@ fi
 
 command -v docker >/dev/null 2>&1 || { echo "[ERROR] docker command not found." >&2; exit 1; }
 
-if [[ "$TARGET_IMAGE" != */* ]]; then
-    TARGET_IMAGE="${ACR_NAMESPACE}/${TARGET_IMAGE}"
-fi
+# Personal Edition supports only one repository level. Keep the final Docker
+# Hub repository component and place it below the configured ACR namespace.
+# This keeps both nginx:1.27 and sonatype/nexus3:3.94.2 usable with the same
+# command shape without producing an unsupported namespace/repository/path.
+TARGET_IMAGE="${ACR_NAMESPACE}/${TARGET_IMAGE##*/}"
 
 ACR_USERNAME="${ACR_USERNAME:-}"
 ACR_PASSWORD="${ACR_PASSWORD:-}"
