@@ -1,8 +1,6 @@
 #!/bin/sh
-# devops-kit PATH 脚本（兼容 bash / zsh / sh）
-# 把 tools/ 下 docker、git、elasticsearch、nexus 四个目录加到 PATH
 
-DEVOPS_KIT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+DEVOPS_KIT_DIR="/opt/apps/devops-kit"
 export DEVOPS_KIT_DIR
 
 TOOLS_DIR="$DEVOPS_KIT_DIR/tools"

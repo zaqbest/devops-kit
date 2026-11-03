@@ -5,8 +5,8 @@ NEXUS_URL="https://nexus.zaqbest.com"  # Nexus 地址，不要以 / 结尾
 USERNAME="admin"                          # 管理员用户名
 PASSWORD="admin123"                  # 管理员密码
 REPOSITORY="maven-releases"               # 要清理的仓库名称
-KEEP_COUNT=3                              # 每个组件保留的最新版本数量
-DRY_RUN=false                              # true 为演练模式（只打印不删除），false 为真正执行删除
+KEEP_COUNT=10                              # 每个组件保留的最新版本数量
+DRY_RUN=true                              # true 为演练模式（只打印不删除），false 为真正执行删除
 # ==========================================
 
 AUTH="${USERNAME}:${PASSWORD}"
