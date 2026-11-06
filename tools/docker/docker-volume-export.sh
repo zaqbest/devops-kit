@@ -106,7 +106,7 @@ echo "[INFO] Exporting Docker volume ${VOLUME} to ${ARCHIVE}..."
 if ! docker run --rm \
     -v "${VOLUME}:/volume:ro" \
     -v "${ARCHIVE_DIR}:/backup" \
-    alpine:3.20 \
+    registry.cn-hangzhou.aliyuncs.com/zaqbest/alpine:3.20 \
     sh -c 'archive="$1"; shift; tar -C /volume "$@" -czf "/backup/$archive" .' \
     sh "$ARCHIVE_NAME" "${EXCLUDES[@]}"; then
     rm -f "$ARCHIVE"

@@ -76,7 +76,7 @@ echo "[INFO] Importing archive into Docker volume ${VOLUME}..."
 if [[ "$ARCHIVE" == "-" ]]; then
     docker run --rm -i \
         -v "${VOLUME}:/volume" \
-        alpine:3.20 \
+        registry.cn-hangzhou.aliyuncs.com/zaqbest/alpine:3.20 \
         sh -c 'cat > /tmp/volume-archive && tar -xzf /tmp/volume-archive -C /volume && rm -f /tmp/volume-archive'
 else
     ARCHIVE_DIR="$(dirname "$ARCHIVE")"
@@ -86,14 +86,14 @@ else
             docker run --rm \
                 -v "${VOLUME}:/volume" \
                 -v "${ARCHIVE_DIR}:/backup:ro" \
-                alpine:3.20 \
+                registry.cn-hangzhou.aliyuncs.com/zaqbest/alpine:3.20 \
                 tar -xzf "/backup/${ARCHIVE_NAME}" -C /volume
             ;;
         *.tar)
             docker run --rm \
                 -v "${VOLUME}:/volume" \
                 -v "${ARCHIVE_DIR}:/backup:ro" \
-                alpine:3.20 \
+                registry.cn-hangzhou.aliyuncs.com/zaqbest/alpine:3.20 \
                 tar -xf "/backup/${ARCHIVE_NAME}" -C /volume
             ;;
     esac
