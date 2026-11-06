@@ -72,7 +72,7 @@ echo "[INFO] Importing directory ${SOURCE_DIRECTORY} into Docker volume ${VOLUME
 docker run --rm \
     -v "${VOLUME}:/volume" \
     -v "${SOURCE_DIRECTORY}:/source:ro" \
-    alpine:3.20 \
+    registry.cn-hangzhou.aliyuncs.com/zaqbest/alpine:3.20 \
     sh -c 'cp -a /source/. /volume/'
 
 echo "[DONE] Directory imported into Docker volume: $VOLUME"
